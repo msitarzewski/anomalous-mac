@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anomalous.bot/protocol/triage-payload.schema.json",
+  "title": "TriagePayload",
+  "description": "The escalation payload — account-linked (billing + result delivery), composed ON-DEVICE by the local model. COMPOSED TEXT + ALLOWLISTED FIELDS ONLY: never a raw ps dump; command lines never leave the machine (they carry credentials). The client logs the exact bytes sent; the server mirrors the exact bytes received (two diffable ledgers). Transport: OHTTP blind relay — the relay sees IP + ciphertext, the backend sees payload, never IP.",
+  "type": "object",
+  "required": ["schema_version", "bundle_id", "app_version", "os_version", "summary", "metric_curves"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "0.1.0" },
+    "bundle_id": { "type": "string", "maxLength": 255 },
+    "app_version": { "type": "string", "maxLength": 64 },
+    "os_version": { "type": "string", "maxLength": 32 },
+    "hardware_class": { "type": ["string", "null"], "maxLength": 32 },
+    "summary": {
+      "type": "string",
+      "maxLength": 8000,
+      "description": "Prose summary composed by the on-device model — the 'referral letter.' Anonymizer strips paths/hostnames/usernames before composition; composition-from-structured-fields (not quoting) is the primary defense."
+    },
+    "metric_curves": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu_percent": { "type": "array", "items": { "type": "number" }, "maxItems": 240 },
+        "rss_mb": { "type": "array", "items": { "type": "number" }, "maxItems": 240 },
+        "baseline_cpu_percent": { "type": ["number", "null"] },
+        "baseline_rss_mb": { "type": ["number", "null"] }
+      }
+    },
+    "knowledge_map_entry_id": { "type": ["string", "null"], "description": "If the offender matched a shipped knowledge-map entry, its ID — lets the backend skip identity research." },
+    "prior_card": {
+      "type": ["object", "null"],
+      "description": "The on-device diagnosis card, if one was produced — same DiagnosisCard schema the backend fills (Foundation Models custom-provider architecture: one schema, three rungs)."
+    }
+  }
+}

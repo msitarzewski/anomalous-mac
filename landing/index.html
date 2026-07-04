@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#0a0607" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f7f4f3" media="(prefers-color-scheme: light)">
+
+  <link rel="canonical" href="https://anomalous.bot/">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+
+  <title>Anomalous — system anomaly detection for macOS</title>
+  <meta name="description" content="Activity Monitor with a 'So what?' and 'Now what?' layer. A quiet menu-bar app that watches your Mac, judges anomalies on-device, and tells you what's wrong and what to safely do. Open source, no accounts.">
+  <meta name="author" content="Michael Sitarzewski">
+  <meta name="keywords" content="macOS, anomaly detection, Activity Monitor, menu bar, Apple Intelligence, Foundation Models, on-device AI, dasd, CPU, memory leak, open source, Apache-2.0, Swift, SwiftUI">
+
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+  <link rel="icon" type="image/svg+xml" href="/anomalous.svg">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <link rel="mask-icon" href="/anomalous.svg" color="#ff2a1a">
+  <meta name="apple-mobile-web-app-title" content="Anomalous">
+  <meta name="application-name" content="Anomalous">
+  <meta name="msapplication-TileColor" content="#0a0607">
+  <link rel="manifest" href="/manifest.json">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Anomalous">
+  <meta property="og:url" content="https://anomalous.bot/">
+  <meta property="og:title" content="Anomalous — system anomaly detection for macOS">
+  <meta property="og:description" content="Activity Monitor with a 'So what?' and 'Now what?' layer. Judges anomalies on-device; tells you what's wrong and what to safely do. Open source, no accounts.">
+  <meta property="og:image" content="https://anomalous.bot/social-card.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Anomalous app icon — a bar chart with one red anomaly spike and up-arrow — beside the wordmark and tagline.">
+  <meta property="og:locale" content="en_US">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:site" content="@msitarzewski">
+  <meta name="twitter:creator" content="@msitarzewski">
+  <meta name="twitter:title" content="Anomalous — system anomaly detection for macOS">
+  <meta name="twitter:description" content="Activity Monitor with a 'So what?' and 'Now what?' layer. On-device judgment, open source, no accounts.">
+  <meta name="twitter:image" content="https://anomalous.bot/social-card.png">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Anomalous",
+    "description": "System anomaly detection for macOS. A quiet menu-bar app that watches your Mac, judges anomalies on-device with Apple Intelligence, and tells you what a process is, whether it's normal, and what to safely do. Open source, no accounts.",
+    "applicationCategory": "UtilitiesApplication",
+    "operatingSystem": "macOS 26",
+    "processorRequirements": "Apple Silicon",
+    "url": "https://anomalous.bot/",
+    "downloadUrl": "https://anomalous.bot/Anomalous-0.1.0.dmg",
+    "softwareVersion": "0.1.0",
+    "license": "https://www.apache.org/licenses/LICENSE-2.0",
+    "author": { "@type": "Person", "name": "Michael Sitarzewski", "url": "https://github.com/msitarzewski" },
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "image": "https://anomalous.bot/social-card.png"
+  }
+  </script>
+
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+  <header class="hero">
+    <div class="hero-inner">
+      <img src="/anomalous.svg" alt="Anomalous icon" class="hero-icon" width="150" height="150">
+      <h1>Anomalous</h1>
+      <p class="tagline">Activity Monitor with a “So what?” and “Now what?” layer.</p>
+      <p class="sub">macOS shows you <em>what</em> is using CPU and memory. It never tells you whether that’s <em>normal</em>, what the process actually <em>is</em>, or what to <em>do</em> about it. Anomalous is that missing judgment layer — a quiet menu-bar app that stays silent until something is genuinely wrong, then hands you a plain-language diagnosis and one safe action.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="/Anomalous-0.1.0.dmg">Download for macOS</a>
+        <a class="btn btn-secondary" href="https://github.com/msitarzewski/anomalous-mac">Source on GitHub</a>
+        <a class="btn btn-sponsor" href="https://github.com/sponsors/msitarzewski">♥ Sponsor</a>
+      </div>
+      <p class="small-note">macOS 26 · Apple Silicon · Apache-2.0 · on-device · no accounts for the free tier</p>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- The money shot: a real diagnosis card, built in the page -->
+    <section class="section section-demo">
+      <div class="demo-grid">
+        <div class="demo-copy">
+          <h2>It stays quiet — until it doesn’t.</h2>
+          <p>A calm bar-chart sits in your menu bar. When a runaway is detected, the spike turns red and a card appears: what the process is, whether this is normal, and the safest thing to do.</p>
+          <div class="menubar-demo" aria-hidden="true">
+            <span class="mb-label">quiet</span>
+            <span class="mb-chip">
+              <svg viewBox="0 0 150 150" width="22" height="22"><g fill="currentColor"><path d="M85.417,8.333l-18.75,31.25l37.5,0l-18.75,-31.25Z"/><rect x="37.5" y="54.167" width="12.5" height="83.333"/><rect x="100" y="58.333" width="12.5" height="79.167"/><rect x="120.833" y="95.833" width="12.5" height="41.667"/><rect x="79.167" y="33.333" width="12.5" height="104.167"/><rect x="16.667" y="71.875" width="12.5" height="65.625"/><rect x="58.333" y="71.875" width="12.5" height="65.625"/></g></svg>
+            </span>
+            <span class="mb-arrow">→</span>
+            <span class="mb-label">anomaly</span>
+            <span class="mb-chip">
+              <svg viewBox="0 0 150 150" width="22" height="22"><g fill="currentColor"><rect x="37.5" y="54.167" width="12.5" height="83.333"/><rect x="100" y="58.333" width="12.5" height="79.167"/><rect x="120.833" y="95.833" width="12.5" height="41.667"/><rect x="16.667" y="71.875" width="12.5" height="65.625"/><rect x="58.333" y="71.875" width="12.5" height="65.625"/></g><g fill="#ff2a1a"><path d="M85.417,8.333l-18.75,31.25l37.5,0l-18.75,-31.25Z"/><rect x="79.167" y="33.333" width="12.5" height="104.167"/></g></svg>
+            </span>
+          </div>
+        </div>
+
+        <figure class="card" role="img" aria-label="Diagnosis card for the dasd daemon: Caution. Normally about 0.1% CPU; now about 150% for 41 hours. It's a background scheduler wedged in a loop; safe to stop.">
+          <div class="card-head">
+            <span class="proc">dasd</span>
+            <span class="pill pill-caution">⚠ Caution</span>
+            <span class="pill pill-kind">daemon</span>
+          </div>
+          <p class="anomaly">Normally ~0.1% CPU; now ~150% for 41 hours.</p>
+          <p class="plain">Duet Activity Scheduler — the daemon that runs background system tasks — is wedged in a loop, heating your Mac. It’s safe to stop: macOS relaunches it immediately, and worst case a background task runs a little late.</p>
+          <div class="card-actions">
+            <button class="cbtn cbtn-primary" type="button">Force Quit</button>
+            <button class="cbtn cbtn-ghost" type="button">Get help</button>
+          </div>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>What it does</h2>
+      <div class="grid">
+        <div class="feature">
+          <h3>Detects</h3>
+          <p>Rolling per-process baselines catch sustained CPU, monotonic memory growth, and cumulative-time runaways — the slow burns a snapshot tool like Activity Monitor can’t see.</p>
+        </div>
+        <div class="feature">
+          <h3>Judges</h3>
+          <p>Every anomaly is explained on-device by Apple Intelligence, grounded in a curated map of macOS daemons. A typed card: what it is, why it’s hot, is this normal, what to do.</p>
+        </div>
+        <div class="feature">
+          <h3>Acts — safely</h3>
+          <p>Tiered actions: Quit / Force Quit, <code>brew services</code> stop &amp; restart, or explain-only for things you shouldn’t kill. A confident wrong button is worse than no button.</p>
+        </div>
+        <div class="feature">
+          <h3>Sees root daemons</h3>
+          <p>An optional privileged helper — one System Settings approval, never a password prompt — watches root-owned daemons like <code>dasd</code>, where the worst runaways hide.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-story">
+      <h2>Why it exists</h2>
+      <p class="story">The fans were running. Activity Monitor showed <code>mysqld</code> and <code>dasd</code> at the top — but not <em>why</em>. It took a 30-minute manual debugging session to find what the OS had silently tolerated for <strong>two days</strong>: a scheduler daemon wedged in a loop burning 25 CPU-hours and 60&nbsp;GB of RAM, and three queue workers busy-polling MySQL hundreds of times a second. Every runaway had a detectable signature for days. Nothing surfaced it. Anomalous is that missing layer — the context, watching for you.</p>
+    </section>
+
+    <section class="section">
+      <h2>Trust is the product</h2>
+      <div class="grid grid-2">
+        <div class="feature">
+          <h3>Open source, auditable</h3>
+          <p>The sensor is Apache-2.0. You can read exactly what’s collected and what’s sent — and the app’s send log is diffable against this source. No taking our word for it.</p>
+        </div>
+        <div class="feature">
+          <h3>Nothing identifiable leaves</h3>
+          <p>Detection, judgment, and actions run entirely on-device, offline, with no account. The optional cloud triage composes an allowlisted payload — never paths or command lines — and logs it locally, byte-for-byte, before it’s sent.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-download">
+      <h2>Get it</h2>
+      <p>A signed, notarized disk image. Drag Anomalous to Applications and launch — it lives in your menu bar and says nothing until it has something worth saying.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="/Anomalous-0.1.0.dmg">Download Anomalous 0.1.0</a>
+        <a class="btn btn-secondary" href="https://github.com/msitarzewski/anomalous-mac">Build from source</a>
+      </div>
+      <p class="small-note">Requires macOS 26 (Tahoe) or later on Apple Silicon. ~3&nbsp;MB. Free.</p>
+    </section>
+
+    <section class="section section-more">
+      <h2>More from the same workshop</h2>
+      <p class="more-lede">Native macOS tools, built the same way — small, fast, open, no telemetry.</p>
+      <div class="more-grid">
+        <a class="more-card" href="https://brew-browser.zerologic.com/">
+          <strong>Brew Browser →</strong>
+          <span>A native GUI for Homebrew — browse the catalog, install, upgrade, and snapshot your setup to a Brewfile.</span>
+        </a>
+        <a class="more-card" href="https://agencyagents.app/">
+          <strong>Agency Agents →</strong>
+          <span>A native control surface for a curated catalog of AI agent personas, with per-tool deployment.</span>
+        </a>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    <p><strong>Anomalous</strong> — system anomaly detection with superintelligence.</p>
+    <p class="foot-links">
+      <a href="https://github.com/msitarzewski/anomalous-mac">GitHub</a> ·
+      <a href="/Anomalous-0.1.0.dmg">Download</a> ·
+      <a href="https://github.com/sponsors/msitarzewski">♥ Sponsor</a> ·
+      <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache-2.0</a> ·
+      by <a href="https://github.com/msitarzewski">Michael Sitarzewski</a>
+    </p>
+  </footer>
+
+</body>
+</html>

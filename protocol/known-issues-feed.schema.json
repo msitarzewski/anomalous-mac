@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anomalous.bot/protocol/known-issues-feed.schema.json",
+  "title": "KnownIssuesFeed",
+  "description": "The live extension of the knowledge map. Clients pull the WHOLE feed periodically and match locally (ad-blocker-list pattern) — never a per-incident lookup. Feed releases are signed; clients verify before applying.",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "issues"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "0.1.0" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["bundle_id", "affected_versions", "os_versions", "issue_url", "recommended_action", "summary"],
+        "additionalProperties": false,
+        "properties": {
+          "bundle_id": { "type": "string", "maxLength": 255 },
+          "affected_versions": { "type": "array", "items": { "type": "string" }, "description": "Exact versions or semver-ish ranges." },
+          "os_versions": { "type": "array", "items": { "type": "string" } },
+          "issue_url": { "type": "string", "format": "uri", "description": "Evidence link — cards link evidence, never assert it." },
+          "fixed_in_version": { "type": ["string", "null"] },
+          "fixed_url": { "type": ["string", "null"], "format": "uri" },
+          "recommended_action": { "type": "string", "enum": ["update_app", "restart_app", "kill", "none"] },
+          "summary": { "type": "string", "maxLength": 2000 }
+        }
+      }
+    }
+  }
+}

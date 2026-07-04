@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2134 2134" width="2134" height="2134">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6a0d0d"/>
+      <stop offset="1" stop-color="#330000"/>
+    </linearGradient>
+    <radialGradient id="gloss" cx="0.5" cy="0.08" r="0.85">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="squircle">
+      <path d="M2008.333,594.271l0,938.542c0,258.998 -210.273,469.271 -469.271,469.271l-938.542,0c-258.998,0 -469.271,-210.273 -469.271,-469.271l0,-938.542c0,-258.998 210.273,-469.271 469.271,-469.271l938.542,0c258.998,0 469.271,210.273 469.271,469.271Z"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#squircle)">
+    <rect width="2134" height="2134" fill="url(#bg)"/>
+    <rect width="2134" height="2134" fill="url(#gloss)"/>
+    <g fill="none" stroke="#ffffff" stroke-width="116.67" stroke-linecap="round">
+      <path d="M517.484,1071.444l0,617.039"/>
+      <path d="M737.946,875.611l0,812.872"/>
+      <path d="M958.408,1071.444l0,617.039"/>
+      <path d="M1399.332,942.278l0,746.206"/>
+      <path d="M1619.794,1283.944l0,404.539"/>
+    </g>
+    <g fill="#ff2a1a" stroke="#ff2a1a" stroke-width="116.67" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M1181.491,511.028l0,1177.456" fill="none"/>
+      <path d="M1178.87,400l93.75,187.5l-187.5,0l93.75,-187.5Z"/>
+    </g>
+  </g>
+</svg>

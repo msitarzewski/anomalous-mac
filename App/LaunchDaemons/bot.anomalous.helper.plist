@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- LaunchDaemon for the Anomalous privileged helper. Registered by the
+         app via SMAppService.daemon(plistName:). Ships at
+         Contents/Library/LaunchDaemons/ inside the app bundle. -->
+    <key>Label</key>
+    <string>bot.anomalous.helper</string>
+
+    <!-- BundleProgram is relative to the app bundle root. The helper
+         executable is copied to Contents/MacOS/AnomalousHelper. -->
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/AnomalousHelper</string>
+
+    <!-- Vend the Mach service the app connects to (must match
+         HelperConstants.machServiceName). -->
+    <key>MachServices</key>
+    <dict>
+        <key>bot.anomalous.helper</key>
+        <true/>
+    </dict>
+
+    <!-- On-demand: launchd starts the helper when the app first connects,
+         and it stays resident to answer sampling requests. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>bot.anomalous.sensor</string>
+    </array>
+</dict>
+</plist>

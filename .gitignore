@@ -1,0 +1,33 @@
+# ── Build artifacts ───────────────────────────────────────────────────────
+.build/
+**/.build/
+.swiftpm/
+**/.swiftpm/
+DerivedData/
+**/DerivedData/
+*.xcuserstate
+**/xcuserdata/
+
+# XcodeGen generates the project from project.yml — run `xcodegen generate`.
+Anomalous.xcodeproj/
+
+# ── Distribution artifacts ────────────────────────────────────────────────
+dist/
+*.dmg
+*-notarize.zip
+
+# ── Signing secrets (NEVER commit — live in ~/.config/anomalous/signing.env) ─
+signing.env
+*.p8
+*.p12
+*.cer
+*.provisionprofile
+*.mobileprovision
+**/secrets/
+
+# ── OS / editor cruft ─────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+*.swp
+.vscode/
+.idea/

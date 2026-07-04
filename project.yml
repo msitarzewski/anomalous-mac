@@ -1,0 +1,89 @@
+name: Anomalous
+options:
+  bundleIdPrefix: bot.anomalous
+  deploymentTarget:
+    macOS: "26.0"
+
+packages:
+  AnomalousCore:
+    path: AnomalousCore
+
+schemes:
+  Anomalous:
+    build:
+      targets:
+        Anomalous: all
+    test:
+      gatherCoverageData: false
+      targets:
+        - package: AnomalousCore/AnomalousCoreTests
+
+targets:
+  # Privileged helper — runs as root via SMAppService.daemon. Same source
+  # as the AnomalousHelper SwiftPM product; built here so it embeds in the
+  # app bundle at Contents/MacOS/AnomalousHelper (per the LaunchDaemon plist's
+  # BundleProgram).
+  AnomalousHelper:
+    type: tool
+    platform: macOS
+    sources:
+      - AnomalousCore/Sources/AnomalousHelper
+    dependencies:
+      - package: AnomalousCore
+        product: AnomalousCore
+    settings:
+      base:
+        PRODUCT_NAME: AnomalousHelper
+        PRODUCT_BUNDLE_IDENTIFIER: bot.anomalous.helper
+        SWIFT_VERSION: "6.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        CODE_SIGN_IDENTITY: "-"
+
+  Anomalous:
+    type: application
+    platform: macOS
+    sources:
+      - App/Sources
+      - path: App/Resources
+        buildPhase: resources
+    dependencies:
+      - package: AnomalousCore
+        product: AnomalousCore
+      # Build-order only: the helper must be built before the app embeds it.
+      - target: AnomalousHelper
+        embed: false
+        link: false
+    # Place the root helper at Contents/MacOS/AnomalousHelper and the
+    # LaunchDaemon plist at Contents/Library/LaunchDaemons/, exactly where
+    # SMAppService.daemon(plistName:) + the plist's BundleProgram expect them.
+    postBuildScripts:
+      - name: Embed privileged helper + LaunchDaemon plist
+        script: |
+          set -e
+          APP="$BUILT_PRODUCTS_DIR/$WRAPPER_NAME"
+          mkdir -p "$APP/Contents/Library/LaunchDaemons"
+          cp "$SRCROOT/App/LaunchDaemons/bot.anomalous.helper.plist" "$APP/Contents/Library/LaunchDaemons/"
+          cp "$BUILT_PRODUCTS_DIR/AnomalousHelper" "$APP/Contents/MacOS/AnomalousHelper"
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Anomalous
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSUIElement: true
+        LSMinimumSystemVersion: "26.0"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: bot.anomalous.sensor
+        SWIFT_VERSION: "6.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        # Liquid Glass app icon (Icon Composer .icon in App/Resources) + the
+        # menu-bar template imagesets both live in the asset catalog / resources.
+        # actool composes the .icon named "AppIcon" into every required size.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Dev builds: ad-hoc signing. Release: Developer ID + notarization +
+        # Sparkle (reference release flow captured in build-deployment.md).
+        # NOTE: SMAppService.daemon registration REQUIRES Developer ID signing;
+        # ad-hoc dev builds can't register a system daemon — that's the
+        # signing-identity blocker, not a code gap.
+        CODE_SIGN_IDENTITY: "-"

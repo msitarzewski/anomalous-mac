@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14090b"/>
+      <stop offset="1" stop-color="#080506"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.28" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ff2a1a" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#ff2a1a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <image x="90" y="155" width="320" height="320" xlink:href="icon-512.png"/>
+  <text x="470" y="250" font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="88" font-weight="800" fill="#f5f3f2">Anomalous</text>
+  <text x="472" y="320" font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="34" font-weight="600" fill="#ff5a45">System anomaly detection for macOS</text>
+  <text x="472" y="392" font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="27" fill="#b9b2b0">Activity Monitor with a “So what?” and</text>
+  <text x="472" y="428" font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="27" fill="#b9b2b0">“Now what?” layer. On-device. Open source.</text>
+  <text x="472" y="500" font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="22" fill="#7d7472">macOS 26 · Apple Silicon · Apache-2.0 · no accounts</text>
+</svg>

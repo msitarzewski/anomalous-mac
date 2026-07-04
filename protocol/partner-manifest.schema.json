@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anomalous.bot/protocol/partner-manifest.schema.json",
+  "title": "PartnerManifest",
+  "description": "A dev-authored knowledge-map extension — 'we measure; you annotate.' Manifests are PUBLIC. Modes RAISE detection thresholds per their envelope; they NEVER exempt. A mode only applies to processes whose code signature matches team_id (verified client-side via XPC audit token or peer-PID + code-signing check). This is judgment context, never telemetry: no user events, funnels, or sessions exist in this schema.",
+  "type": "object",
+  "required": ["schema_version", "bundle_id", "team_id", "modes"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "0.1.0" },
+    "bundle_id": { "type": "string", "maxLength": 255 },
+    "team_id": { "type": "string", "pattern": "^[A-Z0-9]{10}$", "description": "Apple Developer Team ID — the identity anchor for sender verification." },
+    "modes": {
+      "type": "object",
+      "maxProperties": 16,
+      "description": "Mode name → expected resource envelope. Low-cardinality by design.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "description": { "type": "string", "maxLength": 500 },
+          "max_sustained_cpu_percent": { "type": "number", "minimum": 0, "maximum": 6400, "description": "Envelope ceiling — bounded by ToS caps; hard system ceilings still apply above this." },
+          "max_rss_mb": { "type": "number", "minimum": 0 },
+          "typical_duration_minutes": { "type": ["number", "null"], "description": "Real modes end. 'exporting' forever is itself an anomaly — the fleet audits its annotators." }
+        }
+      }
+    },
+    "known_issue_annotations": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "required": ["affected_versions", "summary"],
+        "additionalProperties": false,
+        "properties": {
+          "affected_versions": { "type": "array", "items": { "type": "string" } },
+          "summary": { "type": "string", "maxLength": 2000 },
+          "issue_url": { "type": ["string", "null"], "format": "uri" }
+        }
+      }
+    }
+  }
+}
