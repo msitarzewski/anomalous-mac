@@ -6,6 +6,11 @@
 
 **Activity Monitor with a "So what?" and "Now what?" layer.**
 
+<p align="center">
+  <img src="media/diagnosis-cards.png" width="460"
+       alt="Anomalous menu-bar popover: two detected anomalies — appstoreagent (~76% CPU for hours) and dasd (100% for hours) — each with a plain-language diagnosis card, safety tier, and a Quit action.">
+</p>
+
 macOS shows you *what* is using CPU and memory. It never tells you whether that's
 *normal*, what the process actually *is*, or what to *do* about it. Anomalous is
 that judgment layer: a quiet menu-bar app that watches your Mac, stays silent when
