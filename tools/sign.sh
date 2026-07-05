@@ -20,6 +20,24 @@ HELPER="$APP/Contents/MacOS/AnomalousHelper"
 
 SIGN=(codesign --force --options runtime --timestamp --sign "$DEV_ID")
 
+# Sparkle embeds nested code (XPC services, Autoupdate, Updater.app) inside its
+# framework. codesign must sign these inside-out BEFORE sealing the app, or
+# notarization rejects the unsigned nested binaries. (SPM puts the framework at
+# Contents/Frameworks/Sparkle.framework.)
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+if [ -d "$SPARKLE" ]; then
+  echo "▸ signing Sparkle nested code (inside-out)"
+  V="$SPARKLE/Versions/B"
+  for nested in \
+    "$V/XPCServices/Installer.xpc" \
+    "$V/XPCServices/Downloader.xpc" \
+    "$V/Autoupdate" \
+    "$V/Updater.app"; do
+    [ -e "$nested" ] && "${SIGN[@]}" "$nested"
+  done
+  "${SIGN[@]}" "$SPARKLE"
+fi
+
 echo "▸ signing helper (inside-out first)"
 "${SIGN[@]}" --entitlements "$HERE/App/Helper.entitlements" \
   --identifier "bot.anomalous.helper" "$HELPER"

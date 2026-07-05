@@ -8,9 +8,14 @@ import AnomalousCore
 struct AnomalousApp: App {
     private let appState = AppState.shared
 
+    // Sparkle auto-update. Owned for the app's lifetime; started at init so
+    // background update checks run from launch. The "Check for Updates…"
+    // control lives in the menu-bar window's footer menu (AnomalyListView).
+    @State private var updater = UpdaterController()
+
     var body: some Scene {
         MenuBarExtra {
-            AnomalyListView(appState: appState)
+            AnomalyListView(appState: appState, updater: updater)
                 .frame(width: 420)
         } label: {
             // The label lives for the app's lifetime — monitoring starts at
@@ -48,7 +53,14 @@ struct AnomalousApp: App {
         }
 
         Window("History", id: "history") {
-            HistoryView(directory: appState.sendLogDirectory)
+            TabView {
+                JournalView(appState: appState)
+                    .tabItem { Label("Journal", systemImage: "list.bullet.clipboard") }
+                HistoryView(directory: appState.sendLogDirectory)
+                    .tabItem { Label("Sent", systemImage: "paperplane") }
+            }
+            .frame(minWidth: 480, minHeight: 380)
+            .padding(.top, 4)
         }
         .windowResizability(.contentMinSize)
     }

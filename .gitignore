@@ -36,3 +36,4 @@ signing.env
 *.swp
 .vscode/
 .idea/
+.claude/

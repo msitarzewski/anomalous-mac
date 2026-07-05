@@ -13,6 +13,7 @@ private extension String {
 
 struct AnomalyListView: View {
     @Bindable var appState: AppState
+    let updater: UpdaterController
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
@@ -163,6 +164,11 @@ struct AnomalyListView: View {
                 Spacer()
 
                 Menu {
+                    Button("Check for Updates…") {
+                        updater.checkForUpdates()
+                    }
+                    .disabled(!updater.canCheckForUpdates)
+                    Divider()
                     Button("Settings…") {
                         // Bring the app forward — a menu-bar (accessory) app's
                         // Settings window otherwise opens behind everything.
@@ -222,8 +228,10 @@ struct DiagnosisCardView: View {
                 anomalyHighlight            // geeky: the numbers ("is this normal?")
                 plainSummary                // processed: plain "what this means"
                 if expanded { identityDetail }   // deep detail on demand
-                actionRow                   // "Now what?" — terse verbs + Get help
-                    .padding(.top, 6)       // breathing room above the buttons
+                if !judged.isResolved {
+                    actionRow               // "Now what?" — terse verbs + Get help
+                        .padding(.top, 6)   // breathing room above the buttons
+                }
                 if case .completed(let result) = judged.escalation {
                     expertResult(result)
                 }
@@ -232,6 +240,8 @@ struct DiagnosisCardView: View {
         }
         .padding(14)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+        .opacity(judged.isResolved ? 0.55 : 1)          // fading out as it resolves
+        .animation(.easeOut(duration: 0.3), value: judged.isResolved)
         .contentShape(Rectangle())
         // The whole card toggles the disclosure — clicking anywhere that
         // isn't a button expands/collapses. Buttons capture their own taps.
@@ -277,18 +287,29 @@ struct DiagnosisCardView: View {
 
             Spacer()
 
-            // Always in the hierarchy for VoiceOver/keyboard (WCAG 2.1.1);
-            // hover only brightens. 24×24 target (WCAG 2.5.8).
-            Button { onDismiss() } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
-                    .opacity(isHovering ? 1 : 0.6)
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
+            if judged.isResolved {
+                // The anomaly cleared on its own (recovered or the process
+                // exited). Brief resolved badge, then the tick removes the card
+                // and files it in the Journal.
+                Label("Resolved", systemImage: "checkmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.green)
+                    .labelStyle(.titleAndIcon)
+                    .accessibilityLabel("\(judged.anomaly.identity.executableName) anomaly resolved")
+            } else {
+                // Always in the hierarchy for VoiceOver/keyboard (WCAG 2.1.1);
+                // hover only brightens. 24×24 target (WCAG 2.5.8).
+                Button { onDismiss() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .opacity(isHovering ? 1 : 0.6)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss — hides this card. It does NOT stop the process; use the action buttons for that.")
+                .accessibilityLabel("Dismiss \(judged.anomaly.identity.executableName) anomaly")
             }
-            .buttonStyle(.plain)
-            .help("Dismiss — hides this card. It does NOT stop the process; use the action buttons for that.")
-            .accessibilityLabel("Dismiss \(judged.anomaly.identity.executableName) anomaly")
         }
     }
 
@@ -346,7 +367,12 @@ struct DiagnosisCardView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if !judged.judgedByModel {
-                Text("knowledge map only").font(.callout).foregroundStyle(.secondary)
+                if case .unavailable = AppleIntelligence.status {
+                    Text("From the built-in knowledge map — turn on Apple Intelligence for richer diagnoses.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    Text("knowledge map only").font(.callout).foregroundStyle(.secondary)
+                }
             }
         }
         .transition(.opacity.combined(with: .move(edge: .top)))

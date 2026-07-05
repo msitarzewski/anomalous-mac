@@ -17,12 +17,18 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.3</string>
+	<string>0.1.4</string>
 	<key>CFBundleVersion</key>
-	<string>4</string>
+	<string>5</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>SUEnableInstallerLauncher</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://anomalous.bot/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>OoRc2WZfiHX21nhhm/inmv5l282Ob97GBwx+fZoML/E=</string>
 </dict>
 </plist>

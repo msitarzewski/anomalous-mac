@@ -32,6 +32,15 @@ public struct JudgmentEngine: Sendable {
             return .mapOnlyCard(Self.thermalCard(anomaly: anomaly, baselineSentence: baselineSentence))
         }
 
+        // Special case: a hung ("Not Responding") app. This isn't a resource
+        // runaway — there's nothing for the model to diagnose from CPU/RSS
+        // (both are flat). The diagnosis is deterministic and the same every
+        // time: the app's event loop is blocked; force-quit and relaunch.
+        // Map-only, no inference (mirrors the kernel_task path).
+        if anomaly.kind == .appHung {
+            return .mapOnlyCard(Self.hungAppCard(anomaly: anomaly, baselineSentence: baselineSentence))
+        }
+
         let entry = knowledgeMap.entry(forProcessName: anomaly.identity.executableName)
 
         #if canImport(FoundationModels)
@@ -84,6 +93,24 @@ public struct JudgmentEngine: Sendable {
             isThisNormal: baselineSentence,
             suggestedAction: "Don't kill kernel_task (you can't). Find and address the process heating the machine, and improve cooling.",
             actionSafetyTier: 3,
+            causallyLinkedProcesses: []
+        )
+    }
+
+    /// A "Not Responding" app: the event loop is wedged, so CPU/RSS reveal
+    /// nothing and there's nothing to infer. Deterministic map-only card —
+    /// force-quit and relaunch. Tier 2 (warn first): quitting a stuck app is
+    /// the standard fix but can lose unsaved work, so it's not one-click safe.
+    static func hungAppCard(anomaly: Anomaly, baselineSentence: String) -> DiagnosisCard {
+        let name = anomaly.identity.executableName
+        let minutes = max(1, Int((anomaly.windowSeconds / 60).rounded()))
+        let unit = minutes == 1 ? "minute" : "minutes"
+        return DiagnosisCard(
+            whatItIs: "\(name) has been unresponsive for \(minutes) \(unit) — it's stopped responding to input.",
+            whyItsProbablyHot: "The app's main thread is blocked (a stuck operation, a wait that never returns, or a deadlock), so its window won't accept clicks or typing. This isn't high resource use — it's the opposite, a frozen app.",
+            isThisNormal: baselineSentence,
+            suggestedAction: "Force quit and relaunch it.",
+            actionSafetyTier: 2,
             causallyLinkedProcesses: []
         )
     }

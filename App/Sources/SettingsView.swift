@@ -29,6 +29,26 @@ struct SettingsView: View {
                  ? "Signed in. \"Get expert help\" appears on diagnoses the on-device model can't fully resolve."
                  : "Paste your account token to enable paid expert triage for unknown or hard-to-judge processes. Detection stays free and local either way.")
                 .font(.footnote).foregroundStyle(.secondary)
+
+            if appState.canEscalate {
+                Section("Balance") {
+                    HStack {
+                        Text("Add funds")
+                        Spacer()
+                        ForEach([500, 1000, 2000], id: \.self) { cents in
+                            Button("$\(cents / 100)") {
+                                Task { await appState.addFunds(amountCents: cents) }
+                            }
+                            .disabled(appState.topupInFlight)
+                        }
+                    }
+                    if let status = appState.topupStatus {
+                        Text(status).font(.footnote).foregroundStyle(.secondary)
+                    }
+                    Text("Opens secure Stripe checkout in your browser. You're only charged when payment completes; credit is added to your prepaid balance.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
         }
         .formStyle(.grouped)
         .padding()
@@ -46,10 +66,31 @@ struct SettingsView: View {
                 Text("Without the helper, Anomalous sees only your own apps. The helper (running with your approval) lets it also watch system daemons like dasd and WindowServer — where the worst runaways hide. It only reads process CPU/memory and can stop a runaway; nothing else.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+
+            Section("Apple Intelligence") {
+                appleIntelligenceRow
+            }
         }
         .formStyle(.grouped)
         .padding()
         .task { appState.helper.refreshStatus() }
+    }
+
+    /// On-device judgment status. When Apple Intelligence is off/unavailable,
+    /// cards fall back to the built-in knowledge map — this says so, and why.
+    @ViewBuilder private var appleIntelligenceRow: some View {
+        switch AppleIntelligence.status {
+        case .available:
+            Label("Available — diagnoses are composed on-device.", systemImage: "checkmark.circle")
+                .foregroundStyle(.green)
+        case .unavailable(let reason):
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Unavailable", systemImage: "exclamationmark.circle")
+                Text(reason).font(.footnote).foregroundStyle(.secondary)
+                Text("Cards use the built-in knowledge map instead — still useful, just not model-composed. Detection and actions are unaffected.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var appVersion: String {

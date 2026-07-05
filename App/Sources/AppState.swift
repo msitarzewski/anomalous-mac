@@ -25,6 +25,11 @@ final class AppState {
         /// when composing an escalation payload (safe fields only).
         let baselineSentence: String
         var escalation: EscalationState = .idle
+        /// Set the moment the anomaly clears (process recovered or exited). The
+        /// card shows a brief "resolved" state, then the tick removes it and
+        /// records it in the journal. nil = still active.
+        var resolvedAt: Date? = nil
+        var isResolved: Bool { resolvedAt != nil }
 
         var isApp: Bool { anomaly.identity.bundleID != nil }
         /// The concrete action offered, gated by the card's safety tier.
@@ -85,13 +90,13 @@ final class AppState {
         let ok = await BrewServices.control(action, service: service.name)
         if ok {
             await refreshBrewServices()
-            if action == "stop" { dismiss(judged) }
+            if action == "stop" { dismiss(judged, reason: .actioned) }
         }
         return ok
     }
 
     private var serverBaseURL: URL {
-        URL(string: ProcessInfo.processInfo.environment["ANOMALOUS_SERVER"] ?? "http://127.0.0.1:8787")!
+        URL(string: ProcessInfo.processInfo.environment["ANOMALOUS_SERVER"] ?? "https://api.anomalous.bot")!
     }
 
     /// Account token for paid triage escalation. Empty until the user signs
@@ -106,6 +111,45 @@ final class AppState {
     }
     var canEscalate: Bool { !accountToken.isEmpty }
 
+    /// Transient feedback for the "Add funds" flow (Settings › Account).
+    var topupStatus: String?
+    var topupInFlight = false
+
+    /// Start a prepaid top-up: ask the server for a Stripe Checkout URL and open
+    /// it in the browser. The balance is only credited by the server's webhook
+    /// once payment completes — this just opens checkout.
+    func addFunds(amountCents: Int) async {
+        guard canEscalate else { topupStatus = "Sign in first (paste your account token)."; return }
+        topupInFlight = true
+        topupStatus = nil
+        defer { topupInFlight = false }
+
+        var request = URLRequest(url: serverBaseURL.appending(path: "/api/v1/account/topup"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accountToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["amount_cents": amountCents])
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            if code == 201, let urlString = json?["checkout_url"] as? String, let url = URL(string: urlString) {
+                NSWorkspace.shared.open(url)
+                topupStatus = "Opening secure checkout in your browser…"
+            } else if code == 503 {
+                topupStatus = "Payments aren't enabled yet. Please try again later."
+            } else if code == 401 {
+                topupStatus = "Your account token was rejected — paste a fresh one."
+            } else {
+                topupStatus = "Couldn't start checkout (\(code)). Please try again."
+            }
+        } catch {
+            topupStatus = "Network error — check your connection and try again."
+        }
+    }
+
     private let collector = Collector()
     /// Root helper — when installed, sampling covers root daemons (dasd,
     /// WindowServer, kernel_task…) the unprivileged collector can't see.
@@ -117,12 +161,24 @@ final class AppState {
     private let baselineStore = BaselineStore(
         fileURL: URL.applicationSupportDirectory.appending(path: "Anomalous/baselines.json")
     )
+    /// Reviewable history of resolved anomalies (local only). A card that
+    /// clears on its own moves here instead of silently vanishing.
+    private let journal = AnomalyJournal(
+        fileURL: URL.applicationSupportDirectory.appending(path: "Anomalous/journal.json")
+    )
+    /// Recent journal entries, for the History/Journal view.
+    private(set) var journalEntries: [JournalEntry] = []
+    /// How long a card lingers in its "resolved" state before the tick removes it.
+    private static let resolvedLingerSeconds: TimeInterval = 6
     private let notifications = NotificationManager()
     private var history: [ProcessIdentity: [ProcessSample]] = [:]
     private var alreadyFlagged: Set<ProcessIdentity> = []
     /// Consecutive ticks a known process failed to sample (transient
     /// rusage failures must not reset long detection windows).
     private var missCounts: [ProcessIdentity: Int] = [:]
+    /// When a GUI app first became unresponsive (nil once it's responding again).
+    private var unresponsiveSince: [ProcessIdentity: Date] = [:]
+    private var journalLoaded = false
     private var monitorTask: Task<Void, Never>?
     /// Persist every ~15 min (10 ticks @ 90s), not every tick — a full
     /// snapshot encode + atomic rewrite each 90s is pure overhead on the
@@ -144,7 +200,7 @@ final class AppState {
         }
         thresholds = t
 
-        let server = ProcessInfo.processInfo.environment["ANOMALOUS_SERVER"] ?? "http://127.0.0.1:8787"
+        let server = ProcessInfo.processInfo.environment["ANOMALOUS_SERVER"] ?? "https://api.anomalous.bot"
         ingestClient = IngestClient(
             baseURL: URL(string: server)!,
             sendLog: SendLog(directory: sendLogDirectory)
@@ -176,6 +232,11 @@ final class AppState {
 
     private func tick() async {
         await baselineStore.loadIfNeeded()
+        if !journalLoaded {
+            await journal.loadIfNeeded()
+            journalEntries = await journal.recent()
+            journalLoaded = true
+        }
         helper.refreshStatus()
         // Always self-classify what we can see: the collector reads user
         // processes with full local metadata (bundle, version, INSTALL
@@ -195,6 +256,9 @@ final class AppState {
         sampledProcessCount = samples.count
 
         var detected: [Anomaly] = []
+        // Identities that are anomalous THIS tick (newly detected or still-active
+        // flagged). Anything shown but NOT in here has resolved — see the prune below.
+        var activeIds: Set<ProcessIdentity> = []
 
         for sample in samples {
             let previous = history[sample.identity]?.last
@@ -216,6 +280,18 @@ final class AppState {
                 }
             }
 
+            // Responsiveness (hung-app detection): for GUI apps, track how long
+            // the process has been not-responding. `stillAnomalous` reads this to
+            // fire/keep an `app_hung` anomaly; clearing it on recovery lets the
+            // standard auto-clear resolve the card.
+            if sample.identity.bundleID != nil {
+                if UnresponsiveProbe.isUnresponsive(pid: sample.identity.pid) {
+                    if unresponsiveSince[sample.identity] == nil { unresponsiveSince[sample.identity] = .now }
+                } else {
+                    unresponsiveSince[sample.identity] = nil
+                }
+            }
+
             // Already diagnosed this instance (in-memory this session, or a
             // persisted flag from a previous launch). Don't re-diagnose or
             // re-notify — but DO re-surface the cached card if this is STILL a
@@ -224,20 +300,20 @@ final class AppState {
             // would otherwise hide behind "All systems nominal" until the flag
             // expires. A known runaway must never be silently hidden.
             if alreadyFlagged.contains(sample.identity) {
+                if stillAnomalous(sample) != nil { activeIds.insert(sample.identity) }
                 await resurfaceIfStillActive(sample)
                 continue
             }
             if await baselineStore.isFlagged(sample.identity) {
                 alreadyFlagged.insert(sample.identity)
+                if stillAnomalous(sample) != nil { activeIds.insert(sample.identity) }
                 await resurfaceIfStillActive(sample)
                 continue
             }
 
-            if let anomaly = DetectionRules.cpuTimeRatioAnomaly(sample: sample, thresholds: thresholds)
-                ?? DetectionRules.sustainedCPUAnomaly(history: history[sample.identity]!, baseline: nil, thresholds: thresholds)
-                ?? DetectionRules.rssLeakAnomaly(history: history[sample.identity]!, thresholds: thresholds)
-                ?? DetectionRules.rssCeilingAnomaly(sample: sample, thresholds: thresholds) {
+            if let anomaly = stillAnomalous(sample) {
                 detected.append(anomaly)
+                activeIds.insert(sample.identity)
                 alreadyFlagged.insert(sample.identity)
                 await baselineStore.markFlagged(sample.identity, kind: anomaly.kind)
                 print("[anomalous] FLAGGED \(anomaly.kind.rawValue) in \(anomaly.identity.executableName) (pid \(anomaly.identity.pid), magnitude \(anomaly.magnitudeCurve.last.map { String(format: "%.1f", $0) } ?? "?"))")
@@ -254,11 +330,30 @@ final class AppState {
                 history[identity] = nil
                 missCounts[identity] = nil
                 alreadyFlagged.remove(identity)
+                unresponsiveSince[identity] = nil
             } else {
                 missCounts[identity] = misses
             }
         }
         for identity in live { missCounts[identity] = nil }
+
+        // Auto-clear (the inverse of resurfacing): a shown card whose process is
+        // no longer anomalous (recovered) or has exited (ended) gets a brief
+        // resolved state, is recorded in the journal, then removed on a later
+        // tick. Exit uses the same miss grace as history eviction so a transient
+        // sampling failure never "resolves" a still-running runaway.
+        for i in anomalies.indices where anomalies[i].resolvedAt == nil {
+            let identity = anomalies[i].anomaly.identity
+            guard !activeIds.contains(identity) else { continue }
+            let ended = !live.contains(identity)
+            if ended, (missCounts[identity] ?? 0) < 2 { continue }
+            anomalies[i].resolvedAt = .now
+            await recordResolution(anomalies[i], reason: ended ? .ended : .recovered)
+        }
+        anomalies.removeAll { judged in
+            guard let resolvedAt = judged.resolvedAt else { return false }
+            return Date.now.timeIntervalSince(resolvedAt) >= Self.resolvedLingerSeconds
+        }
 
         for anomaly in detected {
             await judge(anomaly)
@@ -334,12 +429,50 @@ final class AppState {
     /// not already on screen — WITHOUT re-notifying (resurfacing is not a new
     /// alert). This keeps a persistent runaway visible across relaunches instead
     /// of hiding it behind "All systems nominal" while the 7-day flag holds.
-    private func resurfaceIfStillActive(_ sample: ProcessSample) async {
-        guard !anomalies.contains(where: { $0.anomaly.identity == sample.identity }) else { return }
-        guard let anomaly = DetectionRules.cpuTimeRatioAnomaly(sample: sample, thresholds: thresholds)
+    /// The current resource-anomaly for a sample, if any — the one detection
+    /// chain, shared by first-detection, resurfacing, and the still-active check.
+    private func stillAnomalous(_ sample: ProcessSample) -> Anomaly? {
+        DetectionRules.cpuTimeRatioAnomaly(sample: sample, thresholds: thresholds)
             ?? DetectionRules.sustainedCPUAnomaly(history: history[sample.identity] ?? [], baseline: nil, thresholds: thresholds)
             ?? DetectionRules.rssLeakAnomaly(history: history[sample.identity] ?? [], thresholds: thresholds)
             ?? DetectionRules.rssCeilingAnomaly(sample: sample, thresholds: thresholds)
+            ?? hungAnomaly(for: sample)
+    }
+
+    /// An `app_hung` anomaly if this GUI app has been unresponsive past the
+    /// threshold (blocked event loop — the inverse of the resource rules, which
+    /// a runaway wouldn't trip). Reads `unresponsiveSince`, updated each tick.
+    private func hungAnomaly(for sample: ProcessSample) -> Anomaly? {
+        guard let since = unresponsiveSince[sample.identity] else { return nil }
+        let seconds = Date.now.timeIntervalSince(since)
+        return DetectionRules.hungAppAnomaly(
+            identity: sample.identity,
+            unresponsiveSeconds: seconds,
+            magnitudeCurve: [seconds],
+            detectedAt: .now
+        )
+    }
+
+    /// Move a cleared anomaly into the local journal (newest first) and refresh
+    /// the published list for the History/Journal view.
+    private func recordResolution(_ judged: JudgedAnomaly, reason: AnomalyResolution) async {
+        await journal.record(JournalEntry(
+            processName: judged.anomaly.identity.executableName,
+            bundleID: judged.anomaly.identity.bundleID,
+            kind: judged.anomaly.kind.rawValue,
+            summary: judged.card.whatItIs,
+            action: judged.card.suggestedAction,
+            safetyTier: judged.card.actionSafetyTier,
+            judgedByModel: judged.judgedByModel,
+            detectedAt: judged.anomaly.detectedAt,
+            resolution: reason
+        ))
+        journalEntries = await journal.recent()
+    }
+
+    private func resurfaceIfStillActive(_ sample: ProcessSample) async {
+        guard !anomalies.contains(where: { $0.anomaly.identity == sample.identity }) else { return }
+        guard let anomaly = stillAnomalous(sample)
         else { return } // flagged but no longer anomalous — leave it off screen
         let processKey = BaselineStore.key(for: anomaly.identity)
         guard let cached = await baselineStore.cachedDiagnosis(processKey: processKey, kind: anomaly.kind) else { return }
@@ -348,8 +481,11 @@ final class AppState {
         anomalies.append(JudgedAnomaly(anomaly: anomaly, card: cached.card, judgedByModel: cached.judgedByModel, baselineSentence: baseline))
     }
 
-    func dismiss(_ judged: JudgedAnomaly) {
+    /// Remove a card and record how it left in the journal. User taps on the
+    /// dismiss X are `.dismissed`; taking the offered action is `.actioned`.
+    func dismiss(_ judged: JudgedAnomaly, reason: AnomalyResolution = .dismissed) {
         anomalies.removeAll { $0.id == judged.id }
+        Task { await recordResolution(judged, reason: reason) }
     }
 
     private let actuator = ProcessActuator()
@@ -373,24 +509,24 @@ final class AppState {
                     config.createsNewApplicationInstance = false
                     _ = try? await NSWorkspace.shared.openApplication(at: relaunchURL, configuration: config)
                 }
-                dismiss(judged)
+                dismiss(judged, reason: .actioned)
                 return .done
             case .failure(.notPermitted):
                 // Root-owned: if the privileged helper is installed, it can
                 // do the kill we can't. Otherwise fall back to the copy-paste
                 // sudo command.
                 if await helper.terminate(judged.anomaly.identity) {
-                    dismiss(judged)
+                    dismiss(judged, reason: .actioned)
                     return .done
                 }
                 return .needsSudo(actuator.manualCommand(forExecutable: judged.anomaly.identity.executableName))
             case .failure(.noSuchProcess):
-                dismiss(judged)
+                dismiss(judged, reason: .actioned)
                 return .gone
             case .failure(.identityChanged):
                 // The pid was reused — the flagged process is already gone.
                 // Never kill the stranger now holding its pid.
-                dismiss(judged)
+                dismiss(judged, reason: .actioned)
                 return .identityChanged
             case .failure(.unsupported):
                 return .failed
@@ -466,6 +602,10 @@ final class AppState {
             return "It is using about \(Int(current)) MB of memory, far above what's expected."
         case .novelProcess:
             return "This process is new and unrecognized, and it's using significant resources."
+        case .appHung:
+            let secs = Int(anomaly.windowSeconds)
+            let howLong = secs < 90 ? "for about \(secs) seconds" : "for about \(secs / 60) minutes"
+            return "It has stopped responding to input — unresponsive \(howLong)."
         }
     }
 

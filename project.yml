@@ -7,6 +7,13 @@ options:
 packages:
   AnomalousCore:
     path: AnomalousCore
+  # Sparkle auto-update (github.com/sparkle-project/Sparkle). SPM embeds
+  # Sparkle.framework (with its XPC services + Autoupdate/Updater.app) into
+  # the app bundle — these nested helpers MUST be Developer ID-signed at
+  # release time; see memory-bank/build-deployment.md.
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.9.4"
 
 schemes:
   Anomalous:
@@ -49,6 +56,9 @@ targets:
     dependencies:
       - package: AnomalousCore
         product: AnomalousCore
+      # Sparkle auto-update framework (linked + embedded in the app bundle).
+      - package: Sparkle
+        product: Sparkle
       # Build-order only: the helper must be built before the app embeds it.
       - target: AnomalousHelper
         embed: false
@@ -68,10 +78,21 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Anomalous
-        CFBundleShortVersionString: "0.1.3"
-        CFBundleVersion: "4"
+        CFBundleShortVersionString: "0.1.4"
+        CFBundleVersion: "5"
         LSUIElement: true
         LSMinimumSystemVersion: "26.0"
+        # ── Sparkle auto-update ──────────────────────────────────────────
+        # Appcast served from anomalous.bot (published to the host serving it).
+        SUFeedURL: https://anomalous.bot/appcast.xml
+        # Enable Sparkle's installer XPC launcher so the (non-sandboxed,
+        # Developer ID) app can install updates that land in /Applications.
+        SUEnableInstallerLauncher: true
+        # PLACEHOLDER — the real EdDSA public key is injected at release time
+        # from Sparkle's `generate_keys` (private key stays in the login
+        # Keychain and is NEVER committed). See memory-bank/build-deployment.md.
+        # DO NOT commit a real key here.
+        SUPublicEDKey: "OoRc2WZfiHX21nhhm/inmv5l282Ob97GBwx+fZoML/E="
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: bot.anomalous.sensor

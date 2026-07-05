@@ -9,6 +9,11 @@ public struct Anomaly: Sendable, Equatable {
         case rssLeak = "rss_leak"
         case rssCeiling = "rss_ceiling"
         case novelProcess = "novel_process"
+        /// The INVERSE of the resource rules: a GUI app whose event loop is
+        /// blocked — "Not Responding". ~0 CPU, flat memory, so none of the
+        /// over-use rules fire. Detected via the window-server's own
+        /// unresponsive flag (see UnresponsiveProbe), not from ProcessSamples.
+        case appHung = "app_hung"
     }
 
     public let kind: Kind
@@ -149,6 +154,35 @@ public enum DetectionRules {
             magnitudeCurve: [Double(sample.residentBytes) / 1_048_576],
             baselineValue: nil,
             detectedAt: sample.timestamp
+        )
+    }
+
+    /// Rule 6 (the inverse rule): a GUI app that has been "Not Responding" for
+    /// at least `threshold` seconds. A hung app is the opposite of a runaway —
+    /// its event loop is blocked, so CPU sits near zero and memory stays flat
+    /// and none of rules 1–4 ever fire. Unlike those rules there is no metric
+    /// history here: liveness is a boolean the window-server reports, so the
+    /// caller (AppState) tracks how long the app has been continuously
+    /// unresponsive and passes that duration in.
+    ///
+    /// `unresponsiveSeconds` is the consecutive-unresponsive duration the caller
+    /// has accumulated; `magnitudeCurve` is a caller-supplied liveness/duration
+    /// curve for the card's sparkline (e.g. seconds-unresponsive per tick).
+    public static func hungAppAnomaly(
+        identity: ProcessIdentity,
+        unresponsiveSeconds: TimeInterval,
+        threshold: TimeInterval = 25,
+        magnitudeCurve: [Double],
+        detectedAt: Date
+    ) -> Anomaly? {
+        guard unresponsiveSeconds >= threshold else { return nil }
+        return Anomaly(
+            kind: .appHung,
+            identity: identity,
+            windowSeconds: unresponsiveSeconds,
+            magnitudeCurve: downsample(magnitudeCurve, to: 120),
+            baselineValue: nil,
+            detectedAt: detectedAt
         )
     }
 
