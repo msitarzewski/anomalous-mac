@@ -10,6 +10,12 @@ import AnomalousCore
 @MainActor
 @Observable
 final class AppState {
+    /// The single app-wide state. `@State private var appState = AppState()` in
+    /// the App struct could be initialized more than once — leaving the tick
+    /// loop mutating one instance while the UI observed another (detection
+    /// worked but nothing ever showed). One instance, referenced everywhere.
+    static let shared = AppState()
+
     struct JudgedAnomaly: Identifiable {
         let id = UUID()
         let anomaly: Anomaly
@@ -210,9 +216,20 @@ final class AppState {
                 }
             }
 
-            guard !alreadyFlagged.contains(sample.identity) else { continue }
+            // Already diagnosed this instance (in-memory this session, or a
+            // persisted flag from a previous launch). Don't re-diagnose or
+            // re-notify — but DO re-surface the cached card if this is STILL a
+            // live runaway and it isn't currently on screen. The visible list
+            // is in-memory, so after a relaunch a persistent anomaly (dasd)
+            // would otherwise hide behind "All systems nominal" until the flag
+            // expires. A known runaway must never be silently hidden.
+            if alreadyFlagged.contains(sample.identity) {
+                await resurfaceIfStillActive(sample)
+                continue
+            }
             if await baselineStore.isFlagged(sample.identity) {
-                alreadyFlagged.insert(sample.identity) // cache the persisted flag
+                alreadyFlagged.insert(sample.identity)
+                await resurfaceIfStillActive(sample)
                 continue
             }
 
@@ -225,12 +242,6 @@ final class AppState {
                 await baselineStore.markFlagged(sample.identity, kind: anomaly.kind)
                 print("[anomalous] FLAGGED \(anomaly.kind.rawValue) in \(anomaly.identity.executableName) (pid \(anomaly.identity.pid), magnitude \(anomaly.magnitudeCurve.last.map { String(format: "%.1f", $0) } ?? "?"))")
             }
-        }
-        ticksSinceSave += 1
-        if ticksSinceSave >= Self.saveEveryTicks || !detected.isEmpty {
-            await baselineStore.pruneExpiredFlags()
-            await baselineStore.save()
-            ticksSinceSave = 0
         }
         print("[anomalous] tick: \(samples.count) processes, \(detected.count) new anomalies, \(anomalies.count + detected.count) active")
 
@@ -252,6 +263,18 @@ final class AppState {
         for anomaly in detected {
             await judge(anomaly)
             await contribute(anomaly)
+        }
+
+        // Persist AFTER judging: judge() writes the diagnosis cache, so saving
+        // earlier would persist a flag with NO cached card — and on the next
+        // launch the flagged runaway couldn't be re-surfaced (it would hide
+        // behind "All systems nominal"). Save every N ticks, or whenever we
+        // judged something new.
+        ticksSinceSave += 1
+        if ticksSinceSave >= Self.saveEveryTicks || !detected.isEmpty {
+            await baselineStore.pruneExpiredFlags()
+            await baselineStore.save()
+            ticksSinceSave = 0
         }
     }
 
@@ -305,6 +328,24 @@ final class AppState {
         )
         anomalies.append(judged)
         await notifications.post(for: judged)
+    }
+
+    /// Re-show a flagged process's cached diagnosis if it's STILL anomalous and
+    /// not already on screen — WITHOUT re-notifying (resurfacing is not a new
+    /// alert). This keeps a persistent runaway visible across relaunches instead
+    /// of hiding it behind "All systems nominal" while the 7-day flag holds.
+    private func resurfaceIfStillActive(_ sample: ProcessSample) async {
+        guard !anomalies.contains(where: { $0.anomaly.identity == sample.identity }) else { return }
+        guard let anomaly = DetectionRules.cpuTimeRatioAnomaly(sample: sample, thresholds: thresholds)
+            ?? DetectionRules.sustainedCPUAnomaly(history: history[sample.identity] ?? [], baseline: nil, thresholds: thresholds)
+            ?? DetectionRules.rssLeakAnomaly(history: history[sample.identity] ?? [], thresholds: thresholds)
+            ?? DetectionRules.rssCeilingAnomaly(sample: sample, thresholds: thresholds)
+        else { return } // flagged but no longer anomalous — leave it off screen
+        let processKey = BaselineStore.key(for: anomaly.identity)
+        guard let cached = await baselineStore.cachedDiagnosis(processKey: processKey, kind: anomaly.kind) else { return }
+        var baseline = Self.observation(for: anomaly)
+        if let stats = await baselineStore.baseline(forKey: processKey) { baseline = stats.sentence + " " + baseline }
+        anomalies.append(JudgedAnomaly(anomaly: anomaly, card: cached.card, judgedByModel: cached.judgedByModel, baselineSentence: baseline))
     }
 
     func dismiss(_ judged: JudgedAnomaly) {

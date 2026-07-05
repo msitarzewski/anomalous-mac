@@ -8,23 +8,37 @@ import AnomalousCore
 /// concurrency runtime (`_dispatch_assert_queue_fail`) when XPC calls out.
 /// Everything here is nonisolated; results hop back to the main actor at the
 /// await boundary in HelperClient.
+/// Resume a continuation EXACTLY once — whichever of {reply, XPC error,
+/// timeout} arrives first. Prevents both a hang (never resumed) and a crash
+/// (resumed twice).
+private final class ResumeOnce<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Never>?
+    init(_ c: CheckedContinuation<T, Never>) { continuation = c }
+    func resume(_ value: T) {
+        lock.lock(); defer { lock.unlock() }
+        guard let c = continuation else { return }
+        continuation = nil
+        c.resume(returning: value)
+    }
+}
+
 private final class HelperConnection: @unchecked Sendable {
     private let lock = NSLock()
     private var connection: NSXPCConnection?
 
-    private func proxy() -> AnomalousHelperProtocol? {
+    /// Reuse/create the connection and return a proxy whose XPC failures are
+    /// delivered to `onError`. CRITICAL: without an error handler that resumes
+    /// the caller, a broken/rejected connection makes the reply block never
+    /// fire and the `await` hang forever — which freezes the entire monitoring
+    /// tick (no detection, no cards, banner stuck "off").
+    private func makeProxy(onError: @escaping @Sendable (Error) -> Void) -> AnomalousHelperProtocol? {
         lock.lock(); defer { lock.unlock() }
         if connection == nil {
             let c = NSXPCConnection(machServiceName: HelperConstants.machServiceName, options: .privileged)
-            // NOTE: we deliberately do NOT pin the server end here. Impostors
-            // are already blocked by launchd owning the privileged Mach service
-            // name (registering it needs root), so a client-side pin adds almost
-            // nothing — and it silently breaks the connection to an
-            // already-running helper whose live process signature differs from
-            // the on-disk binary (the sample would hang and system-wide
-            // monitoring would appear stuck "off" despite the helper being
-            // installed). The strong control is the HELPER pinning its CLIENTS
-            // (HelperConstants.clientRequirement), which is enforced server-side.
+            // The server end is deliberately NOT pinned client-side: launchd
+            // owning the privileged Mach service name already blocks impostors.
+            // The strong control is the HELPER pinning its clients.
             c.remoteObjectInterface = NSXPCInterface(with: AnomalousHelperProtocol.self)
             c.invalidationHandler = { [weak self] in
                 guard let self else { return }
@@ -33,7 +47,7 @@ private final class HelperConnection: @unchecked Sendable {
             c.resume()
             connection = c
         }
-        return connection?.remoteObjectProxyWithErrorHandler { _ in } as? AnomalousHelperProtocol
+        return connection?.remoteObjectProxyWithErrorHandler(onError) as? AnomalousHelperProtocol
     }
 
     func invalidate() {
@@ -42,20 +56,27 @@ private final class HelperConnection: @unchecked Sendable {
         connection = nil
     }
 
+    /// Root-wide sample. Returns nil (NEVER hangs) if the helper is unreachable:
+    /// an XPC error OR a 5s timeout resumes the caller. A hung helper must never
+    /// block the tick.
     func sampleAll() async -> [ProcessSample]? {
-        guard let proxy = proxy() else { return nil }
-        return await withCheckedContinuation { continuation in
+        await withCheckedContinuation { (continuation: CheckedContinuation<[ProcessSample]?, Never>) in
+            let once = ResumeOnce(continuation)
+            guard let proxy = makeProxy(onError: { _ in once.resume(nil) }) else { once.resume(nil); return }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { once.resume(nil) }
             proxy.sampleAll { data in
-                continuation.resume(returning: data.flatMap { try? JSONDecoder().decode([ProcessSample].self, from: $0) })
+                once.resume(data.flatMap { try? JSONDecoder().decode([ProcessSample].self, from: $0) })
             }
         }
     }
 
     func terminate(pid: Int32, startAbsTime: UInt64) async -> Bool {
-        guard let proxy = proxy() else { return false }
-        return await withCheckedContinuation { continuation in
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let once = ResumeOnce(continuation)
+            guard let proxy = makeProxy(onError: { _ in once.resume(false) }) else { once.resume(false); return }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { once.resume(false) }
             proxy.terminate(pid: pid, expectedStartAbsTime: startAbsTime) { code in
-                continuation.resume(returning: code == 0)
+                once.resume(code == 0)
             }
         }
     }

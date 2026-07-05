@@ -68,8 +68,8 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Anomalous
-        CFBundleShortVersionString: "0.1.2"
-        CFBundleVersion: "3"
+        CFBundleShortVersionString: "0.1.3"
+        CFBundleVersion: "4"
         LSUIElement: true
         LSMinimumSystemVersion: "26.0"
     settings:

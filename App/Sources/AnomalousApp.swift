@@ -6,7 +6,7 @@ import AnomalousCore
 /// (LSUIElement), no chat — cards and guided steps only.
 @main
 struct AnomalousApp: App {
-    @State private var appState = AppState()
+    private let appState = AppState.shared
 
     var body: some Scene {
         MenuBarExtra {
@@ -24,10 +24,16 @@ struct AnomalousApp: App {
             //     dark on a light bar). No color, no noise.
             //   • active — overlay StatusSpikeRed (ORIGINAL red) exactly over the
             //     anomaly bar + arrow, so the spike turns brand-red on any bar.
-            ZStack {
-                Image("StatusMark")
-                if !appState.anomalies.isEmpty {
-                    Image("StatusSpikeRed")
+            Group {
+                if appState.anomalies.isEmpty {
+                    // Quiet: a TEMPLATE mark the system tints to the menu bar.
+                    Image("StatusMark")
+                } else {
+                    // Active: a single ORIGINAL (color) image — the red spike
+                    // survives (MenuBarExtra flattens a mixed template+color
+                    // label to monochrome, so a ZStack overlay renders white).
+                    // Light/dark bar variants live in the asset.
+                    Image("StatusActive").renderingMode(.original)
                 }
             }
             .accessibilityLabel(appState.anomalies.isEmpty
