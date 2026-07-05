@@ -112,6 +112,10 @@ More native macOS tools from the same workshop — small, fast, open, no telemet
 **[Brew Browser](https://brew-browser.zerologic.com)** (a GUI for Homebrew) ·
 **[Agency Agents](https://agencyagents.app)** (a control surface for AI agent personas).
 
+## Security
+
+Anomalous runs a **root helper** that can sample and terminate processes, and it composes payloads that leave the machine — so security reports are genuinely welcome. See **[SECURITY.md](SECURITY.md)** for scope and the coordinated-disclosure process, and email **msitarzewski@gmail.com** (please don't open a public issue for vulnerabilities).
+
 ## License
 
 [Apache License 2.0](LICENSE) — © 2026 Michael Sitarzewski.
