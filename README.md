@@ -81,30 +81,11 @@ Collector (always on, cheap)  →  Detection rules  →  Judgment (on-device LLM
 - Foundation Models (Apple Intelligence) for the on-device judgment layer;
   degrades to knowledge-map-only cards where unavailable.
 
-## Build & run
+## Building from source
 
-```bash
-# 1. Generate the Xcode project from project.yml
-xcodegen generate
-
-# 2. Fast core sanity check
-swift build --package-path AnomalousCore
-swift test  --package-path AnomalousCore
-
-# 3. Build/run the app in Xcode (scheme: Anomalous), or from the CLI:
-xcodebuild -project Anomalous.xcodeproj -scheme Anomalous -configuration Release build
-```
-
-The privileged helper requires a Developer ID signature to register as a system
-daemon; the reference signing + notarization + DMG pipeline is in [`tools/`](tools/)
-(secrets are read from the environment, never committed).
-
-## Configuring the backend
-
-The escalation/ingest backend URL is injected, not baked in — set `ANOMALOUS_SERVER`
-(default `http://127.0.0.1:8787`). The reference backend is a separate service; the
-sensor works fully without it (local detection, judgment, and actions need no server).
-The wire contract every backend must speak is published in [`protocol/`](protocol/).
+Developer setup, the build/sign/notarize pipeline, and backend configuration
+are in **[BUILD.md](BUILD.md)** — end users don't need any of it, just the
+[download](https://anomalous.bot).
 
 ## Support
 
