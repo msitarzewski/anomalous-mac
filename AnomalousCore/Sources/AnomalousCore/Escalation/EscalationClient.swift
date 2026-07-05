@@ -31,7 +31,15 @@ public struct EscalationClient: Sendable {
     }
 
     public enum EscalationError: Error, Equatable {
-        case unauthorized, insufficientBalance, server(Int), timedOut
+        case unauthorized, insufficientBalance, server(Int), timedOut, insecureTransport
+    }
+
+    /// Never send the account bearer token to a non-loopback host over cleartext
+    /// HTTP. Loopback is allowed (local dev); anything else must be HTTPS.
+    static func assertSecureTransport(_ url: URL) throws {
+        let host = url.host ?? ""
+        let isLoopback = host == "127.0.0.1" || host == "localhost" || host == "::1"
+        guard url.scheme == "https" || isLoopback else { throw EscalationError.insecureTransport }
     }
 
     public let baseURL: URL
@@ -45,6 +53,7 @@ public struct EscalationClient: Sendable {
     }
 
     public func escalate(_ payload: PayloadComposer.TriagePayload) async throws -> Accepted {
+        try Self.assertSecureTransport(baseURL)
         let body = try JSONEncoder().encode(payload)
         _ = try await sendLog.record(flow: .triage, payload: body)
 

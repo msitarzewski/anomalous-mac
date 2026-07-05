@@ -25,6 +25,11 @@ signing.env
 *.mobileprovision
 **/secrets/
 
+# ── Environment / config secrets (defensive — no .env exists in-tree today) ─
+.env
+*.env
+!*.env.example
+
 # ── OS / editor cruft ─────────────────────────────────────────────────────
 .DS_Store
 **/.DS_Store

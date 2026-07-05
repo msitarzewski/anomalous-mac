@@ -16,6 +16,10 @@ private final class HelperConnection: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         if connection == nil {
             let c = NSXPCConnection(machServiceName: HelperConstants.machServiceName, options: .privileged)
+            // Pin the server end: only drive a daemon that is our genuine,
+            // Team-ID + bundle-ID-signed helper (defense in depth — launchd
+            // ownership of the Mach name already blocks impostors without root).
+            c.setCodeSigningRequirement(HelperConstants.helperRequirement)
             c.remoteObjectInterface = NSXPCInterface(with: AnomalousHelperProtocol.self)
             c.invalidationHandler = { [weak self] in
                 guard let self else { return }

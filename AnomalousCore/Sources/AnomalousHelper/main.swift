@@ -30,12 +30,21 @@ if CommandLine.arguments.contains("--probe") {
 
 final class ListenerDelegate: NSObject, NSXPCListenerDelegate {
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
-        // Only our Team-ID-signed app may drive the root helper. An unsigned
-        // or foreign-signed local process is rejected — the root
-        // sampler/killer is not open to anything on the machine.
-        // (Skipped only for the unsigned --probe/dev path via the env flag,
-        // so local development still works before signing.)
-        if ProcessInfo.processInfo.environment["ANOMALOUS_HELPER_ALLOW_UNSIGNED"] == nil {
+        // Only our genuine, Team-ID + bundle-ID-signed app may drive the root
+        // helper. An unsigned or foreign-signed local process is rejected — the
+        // root sampler/killer is not open to anything on the machine.
+        //
+        // RELEASE builds ALWAYS enforce the requirement: the dev-only bypass is
+        // compiled OUT entirely, so no environment variable (or a LaunchDaemon
+        // plist EnvironmentVariables edit) can disable client verification in a
+        // shipped root binary. The bypass exists only for the unsigned
+        // --probe/dev path in DEBUG builds.
+        #if DEBUG
+        let enforceClientRequirement = ProcessInfo.processInfo.environment["ANOMALOUS_HELPER_ALLOW_UNSIGNED"] == nil
+        #else
+        let enforceClientRequirement = true
+        #endif
+        if enforceClientRequirement {
             connection.setCodeSigningRequirement(HelperConstants.clientRequirement)
         }
         connection.exportedInterface = NSXPCInterface(with: AnomalousHelperProtocol.self)
@@ -106,11 +115,32 @@ enum PrivilegedSampler {
         }
     }
 
-    /// Root-authorized termination with the same pid-reuse guard the app
-    /// enforces: re-read the live start time, refuse on mismatch.
+    /// Processes the root helper will NEVER signal, whatever the caller asks —
+    /// a root SIGTERM to these is a system denial-of-service (or disabling
+    /// security tooling), never anomaly remediation. `pid <= 1` covers
+    /// kernel_task (0) and launchd (1); the name set covers other load-bearing
+    /// system/security processes a caller could target by first learning their
+    /// live start time from `sampleAll()`.
+    private static let protectedNames: Set<String> = [
+        "launchd", "kernel_task", "WindowServer", "loginwindow", "logind",
+        "securityd", "syslogd", "notifyd", "opendirectoryd", "coreauthd",
+        "trustd", "syspolicyd", "endpointsecurityd", "sysmond", "watchdogd",
+    ]
+
+    /// Root-authorized termination. Defense in depth: (1) never signal pid ≤ 1,
+    /// (2) the pid-reuse guard — re-read the live start time and refuse on
+    /// mismatch, (3) never signal a protected critical/system process. The
+    /// helper does NOT trust the caller's pid to be a legitimate target.
     static func terminate(pid: Int32, expectedStartAbsTime: UInt64) -> Int32 {
+        guard pid > 1 else { return 5 } // protected: kernel_task(0) / launchd(1)
         guard let live = Collector.rusage(for: pid) else { return 2 } // no such process
         guard live.startAbsTime == expectedStartAbsTime else { return 1 } // identity changed
+
+        var nameBuffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        proc_name(pid, &nameBuffer, UInt32(nameBuffer.count))
+        let name = String(decoding: nameBuffer.prefix(while: { $0 != 0 }).map(UInt8.init(bitPattern:)), as: UTF8.self)
+        guard !protectedNames.contains(name) else { return 5 } // protected critical process
+
         guard kill(pid, SIGTERM) == 0 else {
             switch errno { case EPERM: return 3; case ESRCH: return 2; default: return 4 }
         }

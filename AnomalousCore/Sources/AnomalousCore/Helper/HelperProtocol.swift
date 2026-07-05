@@ -19,9 +19,10 @@ import Foundation
 
     /// Terminate a root-owned process — but ONLY after the helper itself
     /// re-validates the pid's live start time against `expectedStartAbsTime`
-    /// (pid-reuse guard, same rule the app uses). Reply codes:
+    /// (pid-reuse guard, same rule the app uses) AND confirms the target is not
+    /// a protected critical/system process. Reply codes:
     /// 0 = terminated, 1 = identity changed (refused), 2 = no such process,
-    /// 3 = not permitted, 4 = unsupported.
+    /// 3 = not permitted, 4 = unsupported, 5 = protected (refused).
     func terminate(pid: Int32, expectedStartAbsTime: UInt64, withReply reply: @escaping (Int32) -> Void)
 
     /// Helper build version — lets the app detect a stale installed helper
@@ -38,7 +39,7 @@ public enum HelperConstants {
     /// The LaunchDaemon plist basename registered via SMAppService.daemon.
     public static let daemonPlistName = "bot.anomalous.helper.plist"
     /// Bumped on every helper change so the app can spot a stale install.
-    public static let version = "0.1.0"
+    public static let version = "0.1.1"
 
     /// Apple Developer Team ID. The root helper accepts XPC connections ONLY
     /// from clients signed by this team — so a malicious local process can't
@@ -46,7 +47,15 @@ public enum HelperConstants {
     /// anchor server-side.
     public static let teamID = "7JQGQ7CRH8"
 
-    /// Code-signing requirement a client must satisfy to talk to the helper.
+    /// Code-signing requirement a CLIENT must satisfy to talk to the helper —
+    /// pinned to our Team ID AND the app's bundle identifier, so it's "the
+    /// genuine Anomalous app", not merely "anything signed by our team".
     public static let clientRequirement =
-        "anchor apple generic and certificate leaf[subject.OU] = \"\(teamID)\""
+        "anchor apple generic and certificate leaf[subject.OU] = \"\(teamID)\" and identifier \"bot.anomalous.sensor\""
+
+    /// Code-signing requirement the APP applies to the SERVER end of the XPC
+    /// connection — pins the helper's identity so the app won't drive an
+    /// impostor daemon that somehow claimed the Mach name.
+    public static let helperRequirement =
+        "anchor apple generic and certificate leaf[subject.OU] = \"\(teamID)\" and identifier \"bot.anomalous.helper\""
 }

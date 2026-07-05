@@ -91,9 +91,12 @@ final class AppState {
     /// Account token for paid triage escalation. Empty until the user signs
     /// in (Settings). Escalation UI only appears when this is set — the
     /// account-linked paid path never fires anonymously.
+    // Stored in the Keychain, not UserDefaults — it's a credential (the paid
+    // account bearer token), and a UserDefaults plist is readable by any
+    // process with the user's file access.
     var accountToken: String {
-        get { UserDefaults.standard.string(forKey: "accountToken") ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: "accountToken") }
+        get { Keychain.string(for: "accountToken") ?? "" }
+        set { Keychain.set(newValue, for: "accountToken") }
     }
     var canEscalate: Bool { !accountToken.isEmpty }
 
