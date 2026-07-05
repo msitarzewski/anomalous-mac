@@ -106,8 +106,10 @@ struct AnomalyListView: View {
     /// The brand, as a screen: silence, stated with confidence.
     private var allClear: some View {
         VStack(spacing: 10) {
-            Image(systemName: "waveform")
-                .font(.system(size: 30, weight: .light))
+            Image("StatusMark")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 38, height: 38)
                 .foregroundStyle(.tertiary)
             Text("All systems nominal.")
                 .font(.headline)

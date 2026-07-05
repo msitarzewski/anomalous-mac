@@ -1,5 +1,6 @@
 import SwiftUI
 import ServiceManagement
+import AppKit
 import AnomalousCore
 
 /// Standard Settings scene (⌘,) — the HIG home for a menu-bar app's
@@ -13,8 +14,9 @@ struct SettingsView: View {
             general.tabItem { Label("General", systemImage: "gearshape") }
             account.tabItem { Label("Account", systemImage: "person.crop.circle") }
             privacy.tabItem { Label("Privacy", systemImage: "hand.raised") }
+            about.tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 460, height: 280)
+        .frame(width: 460, height: 300)
     }
 
     private var account: some View {
@@ -44,14 +46,46 @@ struct SettingsView: View {
                 Text("Without the helper, Anomalous sees only your own apps. The helper (running with your approval) lets it also watch system daemons like dasd and WindowServer — where the worst runaways hide. It only reads process CPU/memory and can stop a runaway; nothing else.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
-
-            LabeledContent("Server") {
-                Text(appState.serverDescription).foregroundStyle(.secondary)
-            }
         }
         .formStyle(.grouped)
         .padding()
         .task { appState.helper.refreshStatus() }
+    }
+
+    private var appVersion: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
+        return "Version \(v) (\(b))"
+    }
+
+    private var about: some View {
+        VStack(spacing: 10) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable().scaledToFit()
+                .frame(width: 72, height: 72)
+            Text("Anomalous").font(.title2.weight(.semibold))
+            Text(appVersion).font(.caption).foregroundStyle(.secondary)
+            Text("System anomaly detection for macOS — Activity Monitor with a “So what?” and “Now what?” layer.")
+                .font(.callout).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal)
+
+            HStack(spacing: 14) {
+                Link("Website", destination: URL(string: "https://anomalous.bot")!)
+                Text("·").foregroundStyle(.tertiary)
+                Link("GitHub", destination: URL(string: "https://github.com/msitarzewski/anomalous-mac")!)
+                Text("·").foregroundStyle(.tertiary)
+                Link("♥ Sponsor", destination: URL(string: "https://github.com/sponsors/msitarzewski")!)
+            }
+            .font(.callout)
+            .padding(.top, 2)
+
+            Text("Apache-2.0 · © 2026 Michael Sitarzewski")
+                .font(.caption2).foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
     }
 
     @ViewBuilder

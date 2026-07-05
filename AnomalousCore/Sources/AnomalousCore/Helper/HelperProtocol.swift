@@ -39,7 +39,7 @@ public enum HelperConstants {
     /// The LaunchDaemon plist basename registered via SMAppService.daemon.
     public static let daemonPlistName = "bot.anomalous.helper.plist"
     /// Bumped on every helper change so the app can spot a stale install.
-    public static let version = "0.1.1"
+    public static let version = "0.1.2"
 
     /// Apple Developer Team ID. The root helper accepts XPC connections ONLY
     /// from clients signed by this team — so a malicious local process can't

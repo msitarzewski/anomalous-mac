@@ -16,10 +16,15 @@ private final class HelperConnection: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         if connection == nil {
             let c = NSXPCConnection(machServiceName: HelperConstants.machServiceName, options: .privileged)
-            // Pin the server end: only drive a daemon that is our genuine,
-            // Team-ID + bundle-ID-signed helper (defense in depth — launchd
-            // ownership of the Mach name already blocks impostors without root).
-            c.setCodeSigningRequirement(HelperConstants.helperRequirement)
+            // NOTE: we deliberately do NOT pin the server end here. Impostors
+            // are already blocked by launchd owning the privileged Mach service
+            // name (registering it needs root), so a client-side pin adds almost
+            // nothing — and it silently breaks the connection to an
+            // already-running helper whose live process signature differs from
+            // the on-disk binary (the sample would hang and system-wide
+            // monitoring would appear stuck "off" despite the helper being
+            // installed). The strong control is the HELPER pinning its CLIENTS
+            // (HelperConstants.clientRequirement), which is enforced server-side.
             c.remoteObjectInterface = NSXPCInterface(with: AnomalousHelperProtocol.self)
             c.invalidationHandler = { [weak self] in
                 guard let self else { return }
