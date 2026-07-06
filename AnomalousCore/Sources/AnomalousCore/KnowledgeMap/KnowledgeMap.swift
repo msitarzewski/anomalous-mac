@@ -44,4 +44,23 @@ public struct KnowledgeMap: Sendable {
     }
 
     public var count: Int { entries.count }
+
+    /// All entries (stable order by process name) — the corpus-merge and
+    /// context-composition surface.
+    public var allEntries: [KnowledgeEntry] {
+        entries.values.sorted { $0.processName < $1.processName }
+    }
+
+    /// Merge pulled, VERIFIED corpus entries over the shipped map. A pulled
+    /// entry WINS on the same process name — it went through the server-side
+    /// review gate and is newer than the app bundle. `safeAction == nil` on
+    /// a pulled entry is SEMANTIC ("no safe intervention exists"), so it
+    /// legitimately replaces a shipped action rather than falling back to it.
+    public func merging(pulled: [KnowledgeEntry]) -> KnowledgeMap {
+        var merged = entries
+        for entry in pulled {
+            merged[entry.processName] = entry
+        }
+        return KnowledgeMap(entries: Array(merged.values))
+    }
 }

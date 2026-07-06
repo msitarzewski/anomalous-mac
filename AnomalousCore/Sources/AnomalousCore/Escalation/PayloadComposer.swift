@@ -70,13 +70,42 @@ public struct PayloadComposer: Sendable {
             hardwareClass: hardwareClass,
             anomalyType: anomaly.kind.rawValue,
             installSource: anomaly.identity.installSource.rawValue,
-            summary: "\(anomaly.kind.rawValue) anomaly in \(anomaly.identity.executableName). Runs as \(anomaly.identity.ownerIsRoot ? "root" : "the user's account"); \(anomaly.identity.installSource.phrase). \(baselineSentence)",
+            summary: "\(anomaly.kind.rawValue) anomaly in \(anomaly.identity.executableName). Runs as \(anomaly.identity.ownerIsRoot ? "root" : "the user's account"); \(anomaly.identity.installSource.phrase). \(baselineSentence)\(Self.judgmentFacts(for: anomaly))",
             metricCurves: MetricCurves(
                 cpuPercent: anomaly.kind == .sustainedCPU || anomaly.kind == .cpuTimeRatio ? anomaly.magnitudeCurve : nil,
-                rssMB: anomaly.kind == .rssLeak || anomaly.kind == .rssCeiling ? anomaly.magnitudeCurve : nil,
+                // memory.leak_footprint's curve is MB too — it rides the
+                // existing rss_mb field (footprint is the honest successor).
+                rssMB: anomaly.kind == .rssLeak || anomaly.kind == .rssCeiling || anomaly.kind == .memoryLeakFootprint ? anomaly.magnitudeCurve : nil,
                 baselineCPUPercent: anomaly.kind == .sustainedCPU ? anomaly.baselineValue : nil,
-                baselineRSSMB: anomaly.kind == .rssLeak ? anomaly.baselineValue : nil
+                baselineRSSMB: anomaly.kind == .rssLeak || anomaly.kind == .memoryLeakFootprint ? anomaly.baselineValue : nil
             )
         )
+    }
+
+    /// Phase 2 judgment facts, riding in the FREE-FORM summary (the phase
+    /// spec's "confidence/contribution ride along in the existing payload,
+    /// no schema change"). Carrying the wakeups/disk curves structurally
+    /// would need new metric_curves fields = a schema_version bump — noted,
+    /// deliberately not done here. Assembled only from already-safe fields,
+    /// same structural-anonymity argument as the rest of the summary.
+    static func judgmentFacts(for anomaly: Anomaly) -> String {
+        var facts = ""
+        if !anomaly.drivingMetric.isEmpty {
+            facts += " Driving metric: \(anomaly.drivingMetric)"
+            if let deviation = anomaly.baselineDeviation {
+                facts += deviation.isFinite
+                    ? String(format: ", %.1f MADs above its baseline", deviation)
+                    : ", far above a flat baseline"
+            }
+            facts += "."
+        }
+        facts += String(format: " Confidence: %@ (%.2f).", anomaly.confidence.level.rawValue, anomaly.confidence.score)
+        if !anomaly.alsoObserved.isEmpty {
+            facts += " Also observed: \(anomaly.alsoObserved.joined(separator: "; "))."
+        }
+        if let context = anomaly.systemContext {
+            facts += " \(context)"
+        }
+        return facts
     }
 }

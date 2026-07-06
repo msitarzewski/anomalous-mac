@@ -11,6 +11,9 @@ public actor SendLog {
             case signature
             /// Account-linked triage payload.
             case triage
+            /// Anonymous discovery lookup — the process name (never paths or
+            /// args) sent to research an unknown process. Never account-linked.
+            case discovery
         }
         public let id: UUID
         public let flow: Flow

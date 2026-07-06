@@ -54,6 +54,10 @@ struct AnomalyListView: View {
             appState.startMonitoring()
             appState.helper.refreshStatus()
         }
+        // Popover visibility drives discovery polling: a lookup in flight is
+        // dropped when the popover closes (the result still lands server-side).
+        .onAppear { appState.popoverIsOpen = true }
+        .onDisappear { appState.popoverIsOpen = false }
     }
 
     /// The "super part": system-wide monitoring. Shown right in the popover
@@ -141,29 +145,14 @@ struct AnomalyListView: View {
         }
     }
 
-    /// Disclosure stays visible (never buried — product rule); housekeeping
-    /// lives behind the ellipsis, menu-like per the HIG panel exception.
+    /// Housekeeping lives behind the gear, menu-like per the HIG panel
+    /// exception. All preferences (contribution, unknown-process lookup, the
+    /// helper, notifications) live in Settings — the popover is only ever the
+    /// diagnoses, so it stays quiet and uncluttered.
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Toggle(isOn: Binding(
-                    get: { appState.contributionEnabled },
-                    set: { appState.contributionEnabled = $0 }
-                )) {
-                    Text("Contribute anonymous signatures")
-                        .font(.caption)
-                }
-                .toggleStyle(.checkbox)
-
-                if appState.contributedCount > 0 {
-                    Text("· \(appState.contributedCount) sent")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-
-                Spacer()
-
-                Menu {
+        HStack {
+            Spacer()
+            Menu {
                     Button("Check for Updates…") {
                         updater.checkForUpdates()
                     }
@@ -197,14 +186,10 @@ struct AnomalyListView: View {
                     Image(systemName: "gearshape")
                         .foregroundStyle(.secondary)
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.visible)
-                .fixedSize()
-                .accessibilityLabel("Menu: settings, send log, quit")
-            }
-            Text("Nothing identifiable ever leaves this Mac.")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.visible)
+            .fixedSize()
+            .accessibilityLabel("Menu: settings, send log, quit")
         }
     }
 }
@@ -215,6 +200,7 @@ struct DiagnosisCardView: View {
     var appState: AppState? = nil
     @State private var isHovering = false
     @State private var confirming = false
+    @State private var confirmingAck = false
     @State private var sudoCommand: String? = nil
     @State private var brewService: BrewService? = nil
     @State private var brewBusy = false
@@ -227,10 +213,13 @@ struct DiagnosisCardView: View {
                 header                      // name · status · kind · dismiss
                 anomalyHighlight            // geeky: the numbers ("is this normal?")
                 plainSummary                // processed: plain "what this means"
+                groupedObservations        // one-line "also:" for a grouped insight
+                discoveryRow                // "Sourced by Anomalous" / looking up / Look it up
                 if expanded { identityDetail }   // deep detail on demand
                 if !judged.isResolved {
                     actionRow               // "Now what?" — terse verbs + Get help
                         .padding(.top, 6)   // breathing room above the buttons
+                    acknowledgmentRow       // "Normal for me" + Snooze (Phase 4)
                 }
                 if case .completed(let result) = judged.escalation {
                     expertResult(result)
@@ -284,6 +273,14 @@ struct DiagnosisCardView: View {
                 .font(.caption)
                 .padding(.horizontal, 7).padding(.vertical, 2)
                 .background(.secondary.opacity(0.15), in: Capsule())
+            // Anti-mute re-alert marker: an acknowledged condition earned its
+            // way back. Icon + words (never color alone).
+            if let marker = judged.returnedWorse {
+                Label(marker, systemImage: "arrow.uturn.up.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .accessibilityLabel("Re-alert: \(marker)")
+            }
 
             Spacer()
 
@@ -346,6 +343,84 @@ struct DiagnosisCardView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
+    /// A grouped insight's correlated observations (other dimensions of the
+    /// same process, or a causally-linked process) plus any machine-wide
+    /// caveat — ONE terse line each, per the anti-fatigue design: related
+    /// findings share this card instead of spawning their own.
+    @ViewBuilder
+    private var groupedObservations: some View {
+        if !judged.anomaly.alsoObserved.isEmpty {
+            Text("Also: \(judged.anomaly.alsoObserved.joined(separator: " · "))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if let context = judged.anomaly.systemContext {
+            Text(context)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Discovery (opt-in identity lookup) state. Inert Text for the copy and
+    /// the "Sourced by Anomalous" attribution (never color alone — an icon
+    /// carries it too); cited sources are links, like the expert result. A
+    /// genuinely-unknown card with discovery OFF gets a per-card "Look it up".
+    @ViewBuilder
+    private var discoveryRow: some View {
+        switch judged.discovery {
+        case .researching:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Sourced by Anomalous — looking this up…")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.top, 2)
+        case .sourced:
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Sourced by Anomalous", systemImage: "globe.badge.chevron.backward")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.blue)
+                    .accessibilityLabel("This answer was sourced by Anomalous")
+                ForEach(judged.discoverySources, id: \.url) { src in
+                    Link(destination: URL(string: src.url) ?? URL(string: "https://anomalous.bot")!) {
+                        Label(src.note, systemImage: "link").font(.caption)
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.top, 2)
+        case .notRecognized:
+            Text("Anomalous couldn’t identify this one yet — treated conservatively.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
+        case .failed(let message):
+            HStack(spacing: 6) {
+                Text(message).font(.caption).foregroundStyle(.orange)
+                if let appState {
+                    Button("Retry") { appState.lookUp(judged) }
+                        .buttonStyle(.plain).font(.caption)
+                }
+            }
+            .padding(.top, 2)
+        case .none:
+            // Per-card on-demand lookup for a genuinely-unknown card when the
+            // global toggle is OFF — a single-process consent (also logged).
+            if judged.genuinelyUnknown, let appState, !appState.discoveryEnabled, !judged.isResolved {
+                Button {
+                    appState.lookUp(judged)
+                } label: {
+                    Label("Look it up", systemImage: "magnifyingglass")
+                }
+                .controlSize(.small)
+                .padding(.top, 2)
+                .help("Send just this process's name (no paths, no personal data) to Anomalous to look up what it is. Logged in your send log.")
+            }
+        }
+    }
+
     /// Disclosure: the geeky/deep detail — full identity, the recommended
     /// action in prose, and system-specific remediation. Same size as the
     /// summary and NOT indented — it reads as a continuation, not a sidebar.
@@ -389,6 +464,64 @@ struct DiagnosisCardView: View {
             }
             Spacer(minLength: 8)
             escalationControls
+        }
+    }
+
+    /// Phase 4's acknowledgment verbs — the loop that TEACHES instead of
+    /// muting. "Normal for me" raises this condition's envelope (two-step,
+    /// with the intent-heuristic first-touch copy); Snooze is time-boxed.
+    /// Icon + word on every control, never color alone (design-guidelines.md).
+    @ViewBuilder
+    private var acknowledgmentRow: some View {
+        if let appState {
+            if confirmingAck {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(appState.ackPrompt(for: judged))
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Button {
+                            confirmingAck = false
+                            Task { await appState.acknowledge(judged) }
+                        } label: {
+                            Label("Yes, normal for me", systemImage: "checkmark.seal")
+                        }
+                        .controlSize(.regular)
+                        Button("Cancel") { confirmingAck = false }
+                            .controlSize(.regular)
+                    }
+                }
+                .padding(.top, 4)
+            } else {
+                HStack(spacing: 8) {
+                    Button {
+                        confirmingAck = true
+                    } label: {
+                        Label("Normal for me", systemImage: "checkmark.seal")
+                    }
+                    .controlSize(.regular)
+                    .help("Accepts this much as normal for this process. Never mutes — you're re-alerted if it gets materially worse, changes behavior, or restarts.")
+
+                    Menu {
+                        Button {
+                            Task { await appState.snooze(judged, for: 3600) }
+                        } label: {
+                            Label("For 1 hour", systemImage: "moon.zzz")
+                        }
+                        Button {
+                            Task { await appState.snoozeToday(judged) }
+                        } label: {
+                            Label("Rest of today", systemImage: "moon.zzz.fill")
+                        }
+                    } label: {
+                        Label("Snooze", systemImage: "moon.zzz")
+                    }
+                    .fixedSize()
+                    .help("Hides this card for a while. It re-surfaces when the snooze expires if still active — sooner if it gets materially worse.")
+                }
+                .padding(.top, 2)
+            }
         }
     }
 

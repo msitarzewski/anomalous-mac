@@ -47,14 +47,17 @@ struct JournalView: View {
         case .ended: "stop.circle"
         case .dismissed: "xmark.circle"
         case .actioned: "checkmark.circle"
+        case .acknowledged: "checkmark.seal"
+        case .snoozed: "moon.zzz"
         }
     }
 
     private func tint(_ r: AnomalyResolution) -> Color {
         switch r {
         case .recovered, .actioned: .green
-        case .ended: .secondary
+        case .ended, .snoozed: .secondary
         case .dismissed: .orange
+        case .acknowledged: .blue
         }
     }
 

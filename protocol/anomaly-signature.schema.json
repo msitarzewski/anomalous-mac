@@ -39,8 +39,11 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["sustained_cpu", "cputime_ratio", "rss_leak", "rss_ceiling", "novel_process"],
-          "description": "Detection rule that fired (see seed.md architecture — rules derived from the founding incident)."
+          "anyOf": [
+            { "enum": ["sustained_cpu", "cputime_ratio", "rss_leak", "rss_ceiling", "novel_process"] },
+            { "pattern": "^(cpu|memory|gpu|network|disk|energy|responsiveness)\\.[a-z][a-z0-9_]*$" }
+          ],
+          "description": "Anomaly vocabulary — two valid forms on the wire. (1) Legacy: the original five macOS rule names (sustained_cpu, cputime_ratio, rss_leak, rss_ceiling, novel_process), still emitted by shipped sensors. (2) Universal namespaced form `{dimension}.{pattern}` where dimension is one of cpu|memory|gpu|network|disk|energy|responsiveness — e.g. 'cpu.sustained', 'memory.leak', 'disk.thrash', 'energy.drain'. The namespace is platform-neutral by design: Windows/Linux sensors and new macOS dimensions extend the pattern half without schema changes."
         },
         "window_seconds": { "type": "integer", "minimum": 60 },
         "magnitude_curve": {
@@ -48,7 +51,7 @@
           "minItems": 1,
           "maxItems": 120,
           "items": { "type": "number" },
-          "description": "Downsampled metric curve over the window (percent CPU or MB RSS depending on type). Single-point curves are legitimate for ratio/ceiling rules; window rules produce series."
+          "description": "Downsampled metric curve over the window (percent CPU or MB RSS for the legacy types; the dimension's native unit for namespaced types). Single-point curves are legitimate for ratio/ceiling rules; window rules produce series."
         },
         "baseline_value": { "type": ["number", "null"], "description": "Rolling baseline the observation deviated from, same unit as curve." },
         "duration_hours": { "type": ["number", "null"], "description": "How long the condition has persisted, if pre-existing (cputime_ratio rule)." }

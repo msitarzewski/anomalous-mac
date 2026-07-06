@@ -8,50 +8,155 @@ import AnomalousCore
 struct SettingsView: View {
     @Bindable var appState: AppState
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var inviteCode = ""
+    @State private var accountEmail = ""
 
     var body: some View {
         TabView {
             general.tabItem { Label("General", systemImage: "gearshape") }
             account.tabItem { Label("Account", systemImage: "person.crop.circle") }
             privacy.tabItem { Label("Privacy", systemImage: "hand.raised") }
+            transparency.tabItem { Label("Transparency", systemImage: "eye") }
             about.tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 460, height: 300)
+        // One frame is shared across all tabs, so size it to the TALLEST —
+        // Transparency, with its full "what we sample" list — so no tab
+        // scrolls, and a touch wider so the prose stops wrapping so tightly.
+        .frame(width: 560, height: 640)
     }
 
     private var account: some View {
         Form {
-            SecureField("Account token", text: Binding(
-                get: { appState.accountToken },
-                set: { appState.accountToken = $0 }
-            ))
-            Text(appState.canEscalate
-                 ? "Signed in. \"Get expert help\" appears on diagnoses the on-device model can't fully resolve."
-                 : "Paste your account token to enable paid expert triage for unknown or hard-to-judge processes. Detection stays free and local either way.")
-                .font(.footnote).foregroundStyle(.secondary)
-
-            if appState.canEscalate {
-                Section("Balance") {
-                    HStack {
-                        Text("Add funds")
-                        Spacer()
-                        ForEach([500, 1000, 2000], id: \.self) { cents in
-                            Button("$\(cents / 100)") {
-                                Task { await appState.addFunds(amountCents: cents) }
-                            }
-                            .disabled(appState.topupInFlight)
-                        }
-                    }
-                    if let status = appState.topupStatus {
-                        Text(status).font(.footnote).foregroundStyle(.secondary)
-                    }
-                    Text("Opens secure Stripe checkout in your browser. You're only charged when payment completes; credit is added to your prepaid balance.")
-                        .font(.footnote).foregroundStyle(.secondary)
+            if case .active(let balanceCents) = appState.accountStatus {
+                gratitudeSection
+                premiumSection
+                balanceSection(balanceCents: balanceCents)
+                Section { Button("Sign out", role: .destructive) { appState.signOutAccount() } }
+            } else {
+                Section {
+                    Text("Detection is always free and runs entirely on your Mac. **Premium** adds expert help for the rare process the on-device model can't figure out on its own.")
+                        .font(.callout)
                 }
+                premiumSection
+                createAccountSection
+                tokenSection
             }
         }
         .formStyle(.grouped)
         .padding()
+        .task { await appState.verifyAccount() }
+    }
+
+    // MARK: Account sub-views
+
+    /// The reminder that they're awesome — shown once the token verifies.
+    private var gratitudeSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Thank you — you're awesome.", systemImage: "heart.fill")
+                    .foregroundStyle(.pink).font(.headline)
+                Text("You're backing independent, privacy-first Mac software and helping keep detection free and local for everyone. That genuinely matters. 💜")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// What premium is — enumerated, in plain language. No "triage", no "paid".
+    private var premiumSection: some View {
+        Section("Premium — expert help when you need it") {
+            premiumFeature("stethoscope", "Expert diagnosis on demand",
+                "When a process stumps the on-device model, get a researched answer from frontier AI — with cited evidence you can check.")
+            premiumFeature("arrow.uturn.backward", "Only pay when it helps",
+                "You're charged only when you get a real diagnosis. No answer, no charge — refunded automatically.")
+            premiumFeature("arrow.triangle.2.circlepath", "Gets cheaper as it grows",
+                "Answers are shared and cached by condition, so a diagnosis someone already unlocked is instant — and a fraction of the price — for you.")
+        }
+    }
+
+    private func premiumFeature(_ icon: String, _ title: String, _ body: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon).foregroundStyle(.tint).frame(width: 22)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Text(body).font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func balanceSection(balanceCents: Int) -> some View {
+        Section("Balance") {
+            HStack {
+                Text("Available")
+                Spacer()
+                Text(dollars(balanceCents)).font(.body.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            HStack {
+                Text("Add funds")
+                Spacer()
+                ForEach([500, 1000, 2000], id: \.self) { cents in
+                    Button("$\(cents / 100)") {
+                        Task { await appState.addFunds(amountCents: cents) }
+                    }
+                    .disabled(appState.topupInFlight)
+                }
+            }
+            if let status = appState.topupStatus {
+                Text(status).font(.footnote).foregroundStyle(.secondary)
+            }
+            Text("Opens secure Stripe checkout in your browser. You're only charged when payment completes; credit is added to your prepaid balance.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    /// Redeem a single-use invite code to create the account.
+    private var createAccountSection: some View {
+        Section("Have an invite code?") {
+            TextField("Invite code", text: $inviteCode)
+                .textContentType(.oneTimeCode)
+            TextField("Email", text: $accountEmail)
+                .textContentType(.emailAddress)
+            Button {
+                Task { await appState.createAccount(inviteCode: inviteCode, email: accountEmail) }
+            } label: {
+                HStack(spacing: 6) {
+                    if appState.createInFlight { ProgressView().controlSize(.small) }
+                    Text("Create Account")
+                }
+            }
+            .disabled(appState.createInFlight || inviteCode.isEmpty || !accountEmail.contains("@"))
+            if let status = appState.createStatus {
+                Text(status).font(.footnote).foregroundStyle(.orange)
+            }
+            Text("Invite codes are single-use. Your email is only for receipts and recovering your balance — nothing else, ever.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    /// For users who already have a token (e.g. minted on the web dashboard).
+    private var tokenSection: some View {
+        Section("Already have a token?") {
+            SecureField("Account token", text: Binding(
+                get: { appState.accountToken },
+                set: { appState.accountToken = $0 }
+            ))
+            Button("Verify") { Task { await appState.verifyAccount() } }
+                .disabled(appState.accountToken.isEmpty)
+            switch appState.accountStatus {
+            case .verifying:
+                Label("Verifying…", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.footnote).foregroundStyle(.secondary)
+            case .invalid(let message):
+                Text(message).font(.footnote).foregroundStyle(.orange)
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    private func dollars(_ cents: Int) -> String {
+        String(format: "$%.2f", Double(cents) / 100)
     }
 
     private var general: some View {
@@ -69,6 +174,15 @@ struct SettingsView: View {
 
             Section("Apple Intelligence") {
                 appleIntelligenceRow
+            }
+
+            Section("Notifications") {
+                Toggle("Notify when an anomaly resolves", isOn: Binding(
+                    get: { appState.notifyResolutions },
+                    set: { appState.notifyResolutions = $0 }
+                ))
+                Text("Quiet, passive notices when a journal-worthy anomaly clears — they never make a sound or break Focus. Off by default: silence is the point.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -160,14 +274,86 @@ struct SettingsView: View {
         }
     }
 
+    /// "What we sample & why" — every dimension in plain language, the quiet
+    /// findings the sensor chose NOT to surface, and the local-processing
+    /// statement. Radical transparency as product (phase-4).
+    private static let sampledDimensions: [(name: String, why: String)] = [
+        ("CPU time", "How much processor a process has used, and how fast it's using it now — the classic runaway signal."),
+        ("Memory footprint", "How much memory a process holds and whether it keeps climbing — the leak signal."),
+        ("GPU", "How much of the graphics processor a process is using, and its GPU memory — a stuck render loop or a runaway tab."),
+        ("Power & wake-ups", "How much energy a process draws and how often it jolts the CPU awake each second — the busy-wait pattern that quietly drains batteries."),
+        ("Disk activity", "How much a process reads and writes per second, compared to its own usual."),
+        ("Network activity", "How much a process sends and receives per second, compared to its usual. Anomalous records only how much — never where it connects."),
+        ("Neural Engine", "How much Apple Neural Engine memory a process holds — for on-device AI and machine-learning work."),
+        ("App responsiveness", "Whether an app has stopped responding to input (a blocked event loop)."),
+        ("Process identity", "Name, bundle, version, where it was installed from, and whether it runs as root — so diagnoses name the right thing."),
+        ("Machine context", "System-wide memory pressure, temperature, power draw, and load — so a victim of machine-wide duress isn't blamed as the culprit."),
+    ]
+
+    private var transparency: some View {
+        Form {
+            Section("What we sample & why") {
+                ForEach(Self.sampledDimensions, id: \.name) { dimension in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(dimension.name)
+                        Text(dimension.why).font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Section("Held back this check") {
+                if appState.quietFindings.isEmpty {
+                    Text("Nothing — no low- or medium-confidence observations right now.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    DisclosureGroup("\(appState.quietFindings.count) quiet finding\(appState.quietFindings.count == 1 ? "" : "s") — observed, not surfaced") {
+                        ForEach(Array(appState.quietFindings.enumerated()), id: \.offset) { _, finding in
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(finding.identity.executableName)
+                                Text(finding.kind.rawValue.replacingOccurrences(of: "_", with: " "))
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text("\(finding.confidence.level.rawValue) confidence")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Text("Findings below the surfacing bar are kept here — and acknowledged conditions inside their envelope — instead of nagging you. They surface the moment confidence rises or an envelope is exceeded.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Where your data goes") {
+                Text("All detection, baselines, and judgment run on this Mac. Acknowledgments, baselines, and the journal never leave it. Only anonymous anomaly signatures are sent (if you opted in), and every byte is in the send log.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Link("Full network disclosure (NETWORK.md)",
+                     destination: URL(string: "https://github.com/msitarzewski/anomalous-mac/blob/main/NETWORK.md")!)
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+    }
+
     private var privacy: some View {
         Form {
-            Toggle("Contribute anonymous anomaly signatures", isOn: Binding(
-                get: { appState.contributionEnabled },
-                set: { appState.contributionEnabled = $0 }
-            ))
-            Text("Only anonymous signatures (process name, version, OS, anomaly shape) are sent — never paths, arguments, or anything identifiable. Every transmission is recorded in the send log.")
-                .font(.footnote).foregroundStyle(.secondary)
+            Section {
+                Toggle("Contribute anonymous anomaly signatures", isOn: Binding(
+                    get: { appState.contributionEnabled },
+                    set: { appState.contributionEnabled = $0 }
+                ))
+                Text("Only anonymous signatures (process name, version, OS, anomaly shape) are sent — never paths, arguments, or anything identifiable. Every transmission is recorded in the send log.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Look up unknown processes", isOn: Binding(
+                    get: { appState.discoveryEnabled },
+                    set: { appState.discoveryEnabled = $0 }
+                ))
+                Text("When Anomalous doesn't recognize a process, send just its name (no personal data, no file paths) to our API to look up what it is. You get a real answer instead of a shrug — **Sourced by Anomalous** — and it's added to the shared knowledge map so everyone benefits. Every lookup is in your send log.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+
             Button("Reveal Send Log in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([appState.sendLogDirectory])
             }

@@ -42,6 +42,30 @@ echo "▸ signing helper (inside-out first)"
 "${SIGN[@]}" --entitlements "$HERE/App/Helper.entitlements" \
   --identifier "bot.anomalous.helper" "$HELPER"
 
+# Phase 4: the WidgetKit appex (Contents/Extensions) must be signed
+# inside-out BEFORE the app seals — same rule as the helper and Sparkle's
+# nested code; notarization rejects an unsigned nested appex.
+WIDGET="$APP/Contents/Extensions/AnomalousWidget.appex"
+if [ -d "$WIDGET" ]; then
+  echo "▸ signing widget appex (inside-out)"
+  "${SIGN[@]}" --entitlements "$HERE/Widget/AnomalousWidget.entitlements" \
+    --identifier "bot.anomalous.sensor.widget" "$WIDGET"
+fi
+
+# The Time Sensitive notification entitlement is MANAGED: AMFI kills the app
+# at launch unless a provisioning profile carrying it is embedded in the
+# bundle. Embed it BEFORE sealing the app so codesign seals it in. (Developer
+# ID profile for bot.anomalous.sensor, valid to 2044 — no annual rotation.)
+# Profile lives OUTSIDE the (public) repo, alongside signing.env — never in
+# the tree. Override with ANOMALOUS_PROVISIONPROFILE; default is the config dir.
+PROFILE="${ANOMALOUS_PROVISIONPROFILE:-$HOME/.config/anomalous/Anomalous.provisionprofile}"
+if [ -f "$PROFILE" ]; then
+  echo "▸ embedding provisioning profile"
+  cp "$PROFILE" "$APP/Contents/embedded.provisionprofile"
+else
+  echo "⚠ no provisioning profile at $PROFILE — time-sensitive entitlement will AMFI-kill the app; remove it from project.yml or add the profile"
+fi
+
 echo "▸ signing app"
 "${SIGN[@]}" --entitlements "$HERE/App/Anomalous.entitlements" \
   --identifier "bot.anomalous.sensor" "$APP"

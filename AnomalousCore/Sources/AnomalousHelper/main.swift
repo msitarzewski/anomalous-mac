@@ -101,6 +101,14 @@ enum PrivilegedSampler {
     static func sampleAll() -> [ProcessSample] {
         let now = Date()
         let nowAbs = mach_absolute_time()
+        // Phase 5 side-channels, same reads as Collector.sampleTick (one
+        // implementation of each, root and non-root): the root tier needs its
+        // own GPU map so root clients (WindowServer) carry gpuTime on the
+        // samples the app merges in, and its own NetworkStatistics manager
+        // because unprivileged reads only see same-uid flows (verified on
+        // 27.0) — running as root is what makes root daemons' traffic real.
+        let gpu = GPUSampler.read()
+        let network = NetworkStatsSampler.shared.snapshotTotals()
         return allPIDs().compactMap { pid in
             guard let usage = Collector.rusage(for: pid) else { return nil }
             let uptime = usage.startAbsTime <= nowAbs
@@ -110,7 +118,22 @@ enum PrivilegedSampler {
                 timestamp: now,
                 cpuTimeSeconds: usage.cpuTimeSeconds,
                 residentBytes: usage.residentBytes,
-                uptimeSeconds: uptime
+                uptimeSeconds: uptime,
+                physFootprintBytes: usage.physFootprintBytes,
+                lifetimeMaxPhysFootprintBytes: usage.lifetimeMaxPhysFootprintBytes,
+                diskBytesRead: usage.diskBytesRead,
+                diskBytesWritten: usage.diskBytesWritten,
+                energyNanojoules: usage.energyNanojoules,
+                pCoreEnergyNanojoules: usage.pCoreEnergyNanojoules,
+                idleWakeups: usage.idleWakeups,
+                interruptWakeups: usage.interruptWakeups,
+                instructions: usage.instructions,
+                cycles: usage.cycles,
+                gpuTimeMachAbs: gpu.gpuTimeByPID[pid] ?? 0,
+                neuralFootprintBytes: usage.neuralFootprintBytes,
+                lifetimeMaxNeuralFootprintBytes: usage.lifetimeMaxNeuralFootprintBytes,
+                netBytesIn: network[pid]?.bytesIn ?? 0,
+                netBytesOut: network[pid]?.bytesOut ?? 0
             )
         }
     }

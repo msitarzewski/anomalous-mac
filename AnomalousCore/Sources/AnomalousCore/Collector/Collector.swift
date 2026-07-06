@@ -22,9 +22,22 @@ public actor Collector {
 
     /// One sampling tick: every visible process, one ProcessSample each.
     public func sampleAll() -> [ProcessSample] {
+        sampleTick().samples
+    }
+
+    /// The full tick read: per-process samples PLUS the device-level GPU
+    /// snapshot the same IOKit pass produced (system context for
+    /// SystemSignals — reading it separately would double the registry walk).
+    public func sampleTick() -> (samples: [ProcessSample], gpuDevice: GPUSampler.DeviceSnapshot?) {
         let now = Date()
         let nowAbs = mach_absolute_time()
         let pids = Self.allPIDs()
+        // Phase 5 side-channels, once per tick: GPU clients are FEW (~100
+        // registry nodes — never a 900-pid scan) and the network snapshot is
+        // one batched SPI query. Both fail to empty; a pid absent from a map
+        // reads 0 (= unknown) on its sample.
+        let gpu = GPUSampler.read()
+        let network = NetworkStatsSampler.shared.snapshotTotals()
         let samples: [ProcessSample] = pids.compactMap { pid in
             guard let usage = Self.rusage(for: pid) else { return nil }
             let identity = identity(for: pid, startAbsTime: usage.startAbsTime)
@@ -36,13 +49,28 @@ public actor Collector {
                 timestamp: now,
                 cpuTimeSeconds: usage.cpuTimeSeconds,
                 residentBytes: usage.residentBytes,
-                uptimeSeconds: uptime
+                uptimeSeconds: uptime,
+                physFootprintBytes: usage.physFootprintBytes,
+                lifetimeMaxPhysFootprintBytes: usage.lifetimeMaxPhysFootprintBytes,
+                diskBytesRead: usage.diskBytesRead,
+                diskBytesWritten: usage.diskBytesWritten,
+                energyNanojoules: usage.energyNanojoules,
+                pCoreEnergyNanojoules: usage.pCoreEnergyNanojoules,
+                idleWakeups: usage.idleWakeups,
+                interruptWakeups: usage.interruptWakeups,
+                instructions: usage.instructions,
+                cycles: usage.cycles,
+                gpuTimeMachAbs: gpu.gpuTimeByPID[pid] ?? 0,
+                neuralFootprintBytes: usage.neuralFootprintBytes,
+                lifetimeMaxNeuralFootprintBytes: usage.lifetimeMaxNeuralFootprintBytes,
+                netBytesIn: network[pid]?.bytesIn ?? 0,
+                netBytesOut: network[pid]?.bytesOut ?? 0
             )
         }
         // Evict cache entries for pids gone this tick — mirrors history pruning.
         let livePIDs = Set(pids)
         identityCache = identityCache.filter { livePIDs.contains($0.key) }
-        return samples
+        return (samples, gpu.device)
     }
 
     // MARK: - libproc
@@ -62,15 +90,52 @@ public actor Collector {
         public let cpuTimeSeconds: Double
         public let residentBytes: UInt64
         public let startAbsTime: UInt64
+        /// phys_footprint — the honest memory number (Activity Monitor's
+        /// Memory column); RSS above stays as the secondary.
+        public let physFootprintBytes: UInt64
+        /// Lifetime high-water phys_footprint.
+        public let lifetimeMaxPhysFootprintBytes: UInt64
+        /// Cumulative disk I/O since process start.
+        public let diskBytesRead: UInt64
+        public let diskBytesWritten: UInt64
+        /// Cumulative energy since process start (all cores), nanojoules —
+        /// the public analog of Activity Monitor's "Energy Impact".
+        public let energyNanojoules: UInt64
+        /// P-core share of the energy (P/E split).
+        public let pCoreEnergyNanojoules: UInt64
+        /// Package-idle / interrupt wakeups — the real battery-drain signal
+        /// (a busy-polling process climbs here even at modest CPU%).
+        public let idleWakeups: UInt64
+        public let interruptWakeups: UInt64
+        /// Retired instructions / CPU cycles — real IPC, distinguishes
+        /// productive busy-work from a spin.
+        public let instructions: UInt64
+        public let cycles: UInt64
+        /// Neural Engine memory footprint (live / lifetime max), bytes —
+        /// the rusage v6 tail (`ri_neural_footprint`); per-process ANE
+        /// attribution in the same syscall, no SPI. 0 on the V4 fallback.
+        public let neuralFootprintBytes: UInt64
+        public let lifetimeMaxNeuralFootprintBytes: UInt64
     }
 
     /// Public so the privileged helper (a separate target) can reuse the
     /// exact same read path — one implementation, root and non-root.
+    ///
+    /// The flavor is pinned to `RUSAGE_INFO_V6` (macOS 15+; our floor is 26)
+    /// instead of `RUSAGE_INFO_CURRENT` so a future SDK bump can never
+    /// silently change the struct/flavor pairing underneath us. Fail-safe: if
+    /// the kernel ever rejects V6, retry with V4 into the same zeroed buffer —
+    /// the V4 layout is a strict prefix of V6, so the V6-only fields
+    /// (energy_nj, penergy_nj) simply stay 0, which reads as "unknown".
     public static func rusage(for pid: pid_t) -> Usage? {
-        var info = rusage_info_current()
+        var info = rusage_info_v6() // zero-initialized: unfilled fields read 0
         let result = withUnsafeMutablePointer(to: &info) { pointer in
             pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { rebound in
-                proc_pid_rusage(pid, RUSAGE_INFO_CURRENT, rebound)
+                var status = proc_pid_rusage(pid, RUSAGE_INFO_V6, rebound)
+                if status != 0 {
+                    status = proc_pid_rusage(pid, RUSAGE_INFO_V4, rebound)
+                }
+                return status
             }
         }
         guard result == 0 else { return nil }
@@ -78,7 +143,19 @@ public actor Collector {
         return Usage(
             cpuTimeSeconds: Double(info.ri_user_time &+ info.ri_system_time) * machSeconds,
             residentBytes: info.ri_resident_size,
-            startAbsTime: info.ri_proc_start_abstime
+            startAbsTime: info.ri_proc_start_abstime,
+            physFootprintBytes: info.ri_phys_footprint,
+            lifetimeMaxPhysFootprintBytes: info.ri_lifetime_max_phys_footprint,
+            diskBytesRead: info.ri_diskio_bytesread,
+            diskBytesWritten: info.ri_diskio_byteswritten,
+            energyNanojoules: info.ri_energy_nj,
+            pCoreEnergyNanojoules: info.ri_penergy_nj,
+            idleWakeups: info.ri_pkg_idle_wkups,
+            interruptWakeups: info.ri_interrupt_wkups,
+            instructions: info.ri_instructions,
+            cycles: info.ri_cycles,
+            neuralFootprintBytes: info.ri_neural_footprint,
+            lifetimeMaxNeuralFootprintBytes: info.ri_lifetime_max_neural_footprint
         )
     }
 

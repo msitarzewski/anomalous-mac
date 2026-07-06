@@ -8,7 +8,11 @@
     "safetyTier": 1,
     "safeAction": "kill — launchd respawns it fresh within seconds, reclaiming the leaked memory immediately",
     "worstCase": "A deferred background task (backup, update check) runs later than it otherwise would.",
-    "causallyLinked": ["appstoreagent", "backupd", "BiomeAgent"]
+    "causallyLinked": [
+      "appstoreagent",
+      "backupd",
+      "BiomeAgent"
+    ]
   },
   {
     "processName": "BiomeAgent",
@@ -19,13 +23,15 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns; killing dasd is what actually reclaims the leaked memory. If it recurs on a beta, the deeper (Siri/Apple-Intelligence-affecting) workaround is to disable BiomeAgent — reversible, and worth undoing once Apple fixes it.",
     "worstCase": "Siri Suggestions and some Apple Intelligence context may briefly stop updating until it respawns.",
-    "causallyLinked": ["dasd"]
+    "causallyLinked": [
+      "dasd"
+    ]
   },
   {
     "processName": "mysqld",
     "displayName": "MySQL Database Server",
     "whatItIs": "The MySQL (or Percona) database server. Hosts databases for local development and services; commonly installed via Homebrew, Docker, or a native package.",
-    "ownedBy": "You (a user-run service, often started by Homebrew services or a launch agent)",
+    "ownedBy": "The MySQL/Percona database server. Ships via Homebrew, a native installer package, or Docker. Its runtime owner and install source vary by install — Anomalous reads those live, per process.",
     "whenHotImplies": "High CPU is almost always a CLIENT hammering the database, not mysqld itself: a busy-polling job queue (Laravel/Sidekiq workers with a near-zero sleep), an N+1 query storm, a missing index, or a runaway migration. A telling signature is thousands of individually sub-millisecond queries per second — each looks idle in SHOW PROCESSLIST, but the aggregate rate pins a core (death by a million paper cuts). Find the client; check SHOW FULL PROCESSLIST and your app's queue workers.",
     "safetyTier": 3,
     "safeAction": null,
@@ -36,7 +42,7 @@
     "processName": "mariadbd",
     "displayName": "MariaDB Database Server",
     "whatItIs": "The MariaDB database server (a MySQL fork). Same role and behavior as mysqld for local development and services.",
-    "ownedBy": "You (a user-run service)",
+    "ownedBy": "The MariaDB database server. Ships via Homebrew, a native package, or Docker; the runtime owner varies by install — Anomalous reads it live, per process.",
     "whenHotImplies": "As with mysqld: high CPU is almost always a client hammering it — busy-polling queue workers, N+1 queries, missing indexes, or a runaway query. The fix is on the client side.",
     "safetyTier": 3,
     "safeAction": null,
@@ -47,7 +53,7 @@
     "processName": "postgres",
     "displayName": "PostgreSQL Database Server",
     "whatItIs": "A PostgreSQL backend process. Postgres runs one process per connection plus background workers (autovacuum, checkpointer, WAL writer), so several 'postgres' processes are normal.",
-    "ownedBy": "You (a user-run service)",
+    "ownedBy": "The PostgreSQL database server. Ships via Homebrew, Postgres.app, a native package, or Docker; the runtime owner varies by install — Anomalous reads it live, per process.",
     "whenHotImplies": "A hot backend usually means one expensive query or a client connection doing heavy work; a hot autovacuum worker means a large table is being vacuumed. Identify the query via pg_stat_activity rather than killing the process.",
     "safetyTier": 3,
     "safeAction": null,
@@ -58,7 +64,7 @@
     "processName": "redis-server",
     "displayName": "Redis Server",
     "whatItIs": "An in-memory key-value store used for caching, queues, and sessions. Single-threaded for command execution.",
-    "ownedBy": "You (a user-run service)",
+    "ownedBy": "The Redis in-memory data store. Ships via Homebrew, a native package, or Docker; the runtime owner varies by install — Anomalous reads it live, per process.",
     "whenHotImplies": "Sustained CPU means a client is issuing expensive commands (KEYS on a large keyspace, big sorts, hot Lua scripts) or an extremely high command rate. Growing memory can mean an unbounded key set with no eviction policy. Check the slow log and MONITOR briefly.",
     "safetyTier": 3,
     "safeAction": null,
@@ -69,7 +75,7 @@
     "processName": "mongod",
     "displayName": "MongoDB Server",
     "whatItIs": "The MongoDB database server.",
-    "ownedBy": "You (a user-run service)",
+    "ownedBy": "The MongoDB database server. Ships via Homebrew, a native package, or Docker; the runtime owner varies by install — Anomalous reads it live, per process.",
     "whenHotImplies": "High CPU usually means an unindexed query doing a collection scan, or a heavy aggregation pipeline. Check db.currentOp() and slow-query logs for the offending operation.",
     "safetyTier": 3,
     "safeAction": null,
@@ -107,7 +113,9 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns on demand; interrupted downloads resume",
     "worstCase": "An app update arrives on the next check instead of now.",
-    "causallyLinked": ["dasd"]
+    "causallyLinked": [
+      "dasd"
+    ]
   },
   {
     "processName": "mds_stores",
@@ -118,7 +126,10 @@
     "safetyTier": 2,
     "safeAction": "usually wait; if persistent, rebuild the index for the hot volume (sudo mdutil -E)",
     "worstCase": "Interrupting mid-index restarts that volume's indexing from scratch.",
-    "causallyLinked": ["corespotlightd", "mdworker"]
+    "causallyLinked": [
+      "corespotlightd",
+      "mdworker"
+    ]
   },
   {
     "processName": "kernel_task",
@@ -140,7 +151,10 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns and resumes analysis later",
     "worstCase": "Photos search/People albums update later.",
-    "causallyLinked": ["photoanalysisd", "photolibraryd"]
+    "causallyLinked": [
+      "photoanalysisd",
+      "photolibraryd"
+    ]
   },
   {
     "processName": "backupd",
@@ -151,7 +165,9 @@
     "safetyTier": 2,
     "safeAction": "prefer stopping the backup from Time Machine settings over killing",
     "worstCase": "Killing mid-backup can leave an incomplete snapshot to clean up (handled automatically, but the backup restarts).",
-    "causallyLinked": ["dasd"]
+    "causallyLinked": [
+      "dasd"
+    ]
   },
   {
     "processName": "bird",
@@ -162,7 +178,10 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns and resumes sync",
     "worstCase": "Sync pauses briefly; no data loss (server is source of truth).",
-    "causallyLinked": ["cloudd", "fileproviderd"]
+    "causallyLinked": [
+      "cloudd",
+      "fileproviderd"
+    ]
   },
   {
     "processName": "WindowServer",
@@ -184,7 +203,9 @@
     "safetyTier": 3,
     "safeAction": null,
     "worstCase": "Security assessment is not something to kill; wait it out.",
-    "causallyLinked": ["trustd"]
+    "causallyLinked": [
+      "trustd"
+    ]
   },
   {
     "processName": "trustd",
@@ -195,7 +216,9 @@
     "safetyTier": 3,
     "safeAction": null,
     "worstCase": "System-critical; heat is a symptom of a chatty client, not trustd.",
-    "causallyLinked": ["syspolicyd"]
+    "causallyLinked": [
+      "syspolicyd"
+    ]
   },
   {
     "processName": "mds",
@@ -206,7 +229,12 @@
     "safetyTier": 2,
     "safeAction": "prefer mdutil over killing; if the index is corrupt, rebuild with sudo mdutil -E on the hot volume",
     "worstCase": "Killing disrupts in-flight indexing and search briefly; it respawns.",
-    "causallyLinked": ["mds_stores", "mdworker", "mdworker_shared", "corespotlightd"]
+    "causallyLinked": [
+      "mds_stores",
+      "mdworker",
+      "mdworker_shared",
+      "corespotlightd"
+    ]
   },
   {
     "processName": "mdworker_shared",
@@ -217,7 +245,11 @@
     "safetyTier": 1,
     "safeAction": "kill — mds respawns workers on demand; that file is re-indexed later",
     "worstCase": "One file's metadata is extracted a bit later; search stays otherwise intact.",
-    "causallyLinked": ["mds", "mds_stores", "mdworker"]
+    "causallyLinked": [
+      "mds",
+      "mds_stores",
+      "mdworker"
+    ]
   },
   {
     "processName": "mdworker",
@@ -228,7 +260,11 @@
     "safetyTier": 1,
     "safeAction": "kill — mds respawns it; the file is re-indexed later",
     "worstCase": "One file's metadata lands in the index slightly later.",
-    "causallyLinked": ["mds", "mds_stores", "mdworker_shared"]
+    "causallyLinked": [
+      "mds",
+      "mds_stores",
+      "mdworker_shared"
+    ]
   },
   {
     "processName": "corespotlightd",
@@ -239,7 +275,10 @@
     "safetyTier": 2,
     "safeAction": "usually wait; it recovers once the donating app finishes or after an index rebuild",
     "worstCase": "In-app Spotlight results (Mail, Notes) update later; on-disk file search is unaffected.",
-    "causallyLinked": ["mds", "mds_stores"]
+    "causallyLinked": [
+      "mds",
+      "mds_stores"
+    ]
   },
   {
     "processName": "fseventsd",
@@ -250,7 +289,10 @@
     "safetyTier": 3,
     "safeAction": null,
     "worstCase": "System-critical for change tracking; killing it can make Spotlight and Time Machine miss changes and force full rescans.",
-    "causallyLinked": ["mds", "backupd"]
+    "causallyLinked": [
+      "mds",
+      "backupd"
+    ]
   },
   {
     "processName": "photoanalysisd",
@@ -261,7 +303,10 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns and resumes analysis later, usually overnight on power",
     "worstCase": "People albums, Memories, and photo search update later.",
-    "causallyLinked": ["mediaanalysisd", "photolibraryd"]
+    "causallyLinked": [
+      "mediaanalysisd",
+      "photolibraryd"
+    ]
   },
   {
     "processName": "photolibraryd",
@@ -272,7 +317,11 @@
     "safetyTier": 2,
     "safeAction": "quit Photos and let it settle rather than killing; the library database is best not interrupted mid-write",
     "worstCase": "Interrupting a library write can require Photos to repair the library on next launch.",
-    "causallyLinked": ["photoanalysisd", "mediaanalysisd", "cloudd"]
+    "causallyLinked": [
+      "photoanalysisd",
+      "mediaanalysisd",
+      "cloudd"
+    ]
   },
   {
     "processName": "coreaudiod",
@@ -294,7 +343,11 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns and resumes sync; the server holds the authoritative copy",
     "worstCase": "iCloud-backed app data syncs a little later; no local data loss.",
-    "causallyLinked": ["bird", "apsd", "akd"]
+    "causallyLinked": [
+      "bird",
+      "apsd",
+      "akd"
+    ]
   },
   {
     "processName": "fileproviderd",
@@ -305,7 +358,10 @@
     "safetyTier": 2,
     "safeAction": "prefer pausing the offending cloud client; killing can interrupt in-flight file materialization",
     "worstCase": "A file being downloaded on demand has to restart; providers generally recover.",
-    "causallyLinked": ["bird", "cloudd"]
+    "causallyLinked": [
+      "bird",
+      "cloudd"
+    ]
   },
   {
     "processName": "nsurlsessiond",
@@ -316,7 +372,10 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns; background transfers resume from where they left off",
     "worstCase": "An in-progress download or upload pauses briefly, then resumes.",
-    "causallyLinked": ["cloudd", "mobileassetd"]
+    "causallyLinked": [
+      "cloudd",
+      "mobileassetd"
+    ]
   },
   {
     "processName": "dataaccessd",
@@ -327,7 +386,10 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns and resumes; the mail server holds the authoritative copy",
     "worstCase": "Mail/Contacts/Calendar sync pauses briefly for that account.",
-    "causallyLinked": ["CalendarAgent", "apsd"]
+    "causallyLinked": [
+      "CalendarAgent",
+      "apsd"
+    ]
   },
   {
     "processName": "CalendarAgent",
@@ -338,7 +400,11 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns and resumes; the server holds the authoritative copy",
     "worstCase": "Calendar changes sync a little later.",
-    "causallyLinked": ["dataaccessd", "cloudd", "apsd"]
+    "causallyLinked": [
+      "dataaccessd",
+      "cloudd",
+      "apsd"
+    ]
   },
   {
     "processName": "geod",
@@ -349,7 +415,9 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns; Maps reloads data as needed",
     "worstCase": "Maps briefly re-fetches tiles or route data.",
-    "causallyLinked": ["nsurlsessiond"]
+    "causallyLinked": [
+      "nsurlsessiond"
+    ]
   },
   {
     "processName": "mobileassetd",
@@ -360,7 +428,10 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns and resumes; asset downloads retry later",
     "worstCase": "An optional asset (a voice, a dictionary) arrives later.",
-    "causallyLinked": ["nsurlsessiond", "dasd"]
+    "causallyLinked": [
+      "nsurlsessiond",
+      "dasd"
+    ]
   },
   {
     "processName": "suggestd",
@@ -371,7 +442,10 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns and resumes learning later",
     "worstCase": "Siri Suggestions refresh a bit later.",
-    "causallyLinked": ["knowledgeconstructiond", "coreduetd"]
+    "causallyLinked": [
+      "knowledgeconstructiond",
+      "coreduetd"
+    ]
   },
   {
     "processName": "knowledgeconstructiond",
@@ -382,7 +456,10 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns and resumes; the graph rebuilds incrementally",
     "worstCase": "Suggestions and Spotlight relevance update later.",
-    "causallyLinked": ["suggestd", "coreduetd"]
+    "causallyLinked": [
+      "suggestd",
+      "coreduetd"
+    ]
   },
   {
     "processName": "coreduetd",
@@ -393,7 +470,11 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns and resumes; predictions rebuild over time",
     "worstCase": "App predictions and proactive suggestions are briefly less accurate.",
-    "causallyLinked": ["suggestd", "knowledgeconstructiond", "dasd"]
+    "causallyLinked": [
+      "suggestd",
+      "knowledgeconstructiond",
+      "dasd"
+    ]
   },
   {
     "processName": "biomesyncd",
@@ -404,7 +485,11 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns and resumes sync",
     "worstCase": "Cross-device activity data syncs later; no user-visible data loss.",
-    "causallyLinked": ["coreduetd", "suggestd", "apsd"]
+    "causallyLinked": [
+      "coreduetd",
+      "suggestd",
+      "apsd"
+    ]
   },
   {
     "processName": "sharingd",
@@ -415,7 +500,10 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns; sharing features re-advertise",
     "worstCase": "AirDrop/Handoff drop for a moment, then recover.",
-    "causallyLinked": ["rapportd", "bluetoothd"]
+    "causallyLinked": [
+      "rapportd",
+      "bluetoothd"
+    ]
   },
   {
     "processName": "rapportd",
@@ -426,7 +514,10 @@
     "safetyTier": 1,
     "safeAction": "kill — respawns and re-establishes Continuity links",
     "worstCase": "Handoff and cross-device calling blink out briefly.",
-    "causallyLinked": ["sharingd", "bluetoothd"]
+    "causallyLinked": [
+      "sharingd",
+      "bluetoothd"
+    ]
   },
   {
     "processName": "identityservicesd",
@@ -437,7 +528,11 @@
     "safetyTier": 2,
     "safeAction": "prefer signing the affected account out/in; killing disrupts Messages/FaceTime session state",
     "worstCase": "iMessage and FaceTime briefly lose registration and re-establish it.",
-    "causallyLinked": ["imagent", "apsd", "akd"]
+    "causallyLinked": [
+      "imagent",
+      "apsd",
+      "akd"
+    ]
   },
   {
     "processName": "imagent",
@@ -448,7 +543,10 @@
     "safetyTier": 2,
     "safeAction": "prefer quitting Messages; killing imagent drops in-flight sends and connection state",
     "worstCase": "A message in the middle of sending may need resending; history is safe.",
-    "causallyLinked": ["identityservicesd", "apsd"]
+    "causallyLinked": [
+      "identityservicesd",
+      "apsd"
+    ]
   },
   {
     "processName": "callservicesd",
@@ -459,7 +557,10 @@
     "safetyTier": 2,
     "safeAction": "prefer ending the call normally; killing can drop an in-progress call",
     "worstCase": "An active FaceTime or relayed phone call is dropped.",
-    "causallyLinked": ["avconferenced", "identityservicesd"]
+    "causallyLinked": [
+      "avconferenced",
+      "identityservicesd"
+    ]
   },
   {
     "processName": "avconferenced",
@@ -470,7 +571,9 @@
     "safetyTier": 2,
     "safeAction": "prefer ending the FaceTime call; killing drops the call immediately",
     "worstCase": "The active FaceTime call ends abruptly.",
-    "causallyLinked": ["callservicesd"]
+    "causallyLinked": [
+      "callservicesd"
+    ]
   },
   {
     "processName": "XProtectRemediator",
@@ -481,7 +584,9 @@
     "safetyTier": 2,
     "safeAction": "prefer letting the scan finish; it is harmless and reschedules if killed, but it is doing real security work",
     "worstCase": "A malware scan is skipped and simply runs again on the next schedule.",
-    "causallyLinked": ["dasd"]
+    "causallyLinked": [
+      "dasd"
+    ]
   },
   {
     "processName": "softwareupdated",
@@ -492,7 +597,10 @@
     "safetyTier": 2,
     "safeAction": "prefer managing it from System Settings > General > Software Update; killing interrupts the download/prepare, which resumes",
     "worstCase": "An in-progress update download or preparation restarts.",
-    "causallyLinked": ["dasd", "nsurlsessiond"]
+    "causallyLinked": [
+      "dasd",
+      "nsurlsessiond"
+    ]
   },
   {
     "processName": "tccd",
@@ -514,7 +622,9 @@
     "safetyTier": 3,
     "safeAction": null,
     "worstCase": "Security-critical; killing it can block app launches and destabilize the system.",
-    "causallyLinked": ["syspolicyd"]
+    "causallyLinked": [
+      "syspolicyd"
+    ]
   },
   {
     "processName": "installd",
@@ -525,7 +635,10 @@
     "safetyTier": 3,
     "safeAction": null,
     "worstCase": "Killing mid-install can leave a partially installed app that must be reinstalled — do not interrupt.",
-    "causallyLinked": ["appstoreagent", "syspolicyd"]
+    "causallyLinked": [
+      "appstoreagent",
+      "syspolicyd"
+    ]
   },
   {
     "processName": "powerd",
@@ -624,7 +737,9 @@
     "safetyTier": 2,
     "safeAction": "usually wait; killing respawns it but disrupts app-launch and icon lookups briefly",
     "worstCase": "File/URL associations and app launching hiccup while it rebuilds.",
-    "causallyLinked": ["syspolicyd"]
+    "causallyLinked": [
+      "syspolicyd"
+    ]
   },
   {
     "processName": "akd",
@@ -635,7 +750,11 @@
     "safetyTier": 2,
     "safeAction": "prefer resolving the Apple ID sign-in in System Settings; killing disrupts in-flight authentication",
     "worstCase": "Apple ID-backed services briefly lose authentication and re-establish it.",
-    "causallyLinked": ["apsd", "cloudd", "identityservicesd"]
+    "causallyLinked": [
+      "apsd",
+      "cloudd",
+      "identityservicesd"
+    ]
   },
   {
     "processName": "apsd",
@@ -646,7 +765,11 @@
     "safetyTier": 2,
     "safeAction": "prefer waiting or toggling the network; killing drops the push connection, delaying notifications until it reconnects",
     "worstCase": "Push notifications (Messages, Mail, iCloud) are delayed briefly while the connection re-establishes.",
-    "causallyLinked": ["identityservicesd", "cloudd", "akd"]
+    "causallyLinked": [
+      "identityservicesd",
+      "cloudd",
+      "akd"
+    ]
   },
   {
     "processName": "ReportCrash",
@@ -657,7 +780,9 @@
     "safetyTier": 1,
     "safeAction": "kill — harmless; it is invoked again on the next crash",
     "worstCase": "One crash report is not written; the crashing app is the real issue to address.",
-    "causallyLinked": ["spindump"]
+    "causallyLinked": [
+      "spindump"
+    ]
   },
   {
     "processName": "spindump",
@@ -668,6 +793,190 @@
     "safetyTier": 1,
     "safeAction": "kill — harmless; it runs again the next time a process hangs",
     "worstCase": "One hang report is skipped; the hanging app is the real target.",
-    "causallyLinked": ["ReportCrash"]
+    "causallyLinked": [
+      "ReportCrash"
+    ]
+  },
+  {
+    "processName": "Messages",
+    "displayName": "Messages",
+    "whatItIs": "Apple's Messages app — iMessage and SMS.",
+    "ownedBy": "Apple (bundled with macOS)",
+    "whenHotImplies": "Active syncing, a busy conversation, or a large attachment loading. Sustained high CPU or memory is usually a stuck send or a huge thread; quitting and reopening clears it.",
+    "safetyTier": 2,
+    "safeAction": "Quit and reopen Messages.",
+    "worstCase": "You'll close your open conversations; nothing is lost — messages are synced.",
+    "causallyLinked": [
+      "imagent",
+      "identityservicesd"
+    ]
+  },
+  {
+    "processName": "Mail",
+    "displayName": "Mail",
+    "whatItIs": "Apple Mail — the built-in email client.",
+    "ownedBy": "Apple (bundled with macOS)",
+    "whenHotImplies": "Indexing a large mailbox, downloading attachments, or a rebuild after an account change. Prolonged high CPU can mean a corrupt mailbox re-indexing.",
+    "safetyTier": 2,
+    "safeAction": "Quit and reopen Mail; if it persists, rebuild the mailbox (Mailbox ▸ Rebuild).",
+    "worstCase": "You'll close Mail; drafts in progress are saved automatically.",
+    "causallyLinked": [
+      "cloudd"
+    ]
+  },
+  {
+    "processName": "Safari",
+    "displayName": "Safari",
+    "whatItIs": "Apple's Safari web browser.",
+    "ownedBy": "Apple (bundled with macOS)",
+    "whenHotImplies": "A heavy page, a runaway script, or many open tabs. High CPU usually traces to one tab (a video, an ad, or a stuck web app).",
+    "safetyTier": 2,
+    "safeAction": "Close the heavy tab, or quit and reopen Safari.",
+    "worstCase": "You'll lose your open tabs unless Safari reopens them; pinned tabs return.",
+    "causallyLinked": [
+      "com.apple.WebKit.WebContent"
+    ]
+  },
+  {
+    "processName": "Google Chrome",
+    "displayName": "Google Chrome",
+    "whatItIs": "Google's Chrome web browser.",
+    "ownedBy": "Ships from Google (not part of macOS)",
+    "whenHotImplies": "A heavy tab, an extension, or many tabs. Chrome spreads work across helper processes — the culprit is usually one tab or extension.",
+    "safetyTier": 2,
+    "safeAction": "Use Chrome's own Task Manager (Window ▸ Task Manager) to find and close the heavy tab.",
+    "worstCase": "Closing a tab loses its unsaved page state; the browser stays open.",
+    "causallyLinked": [
+      "Google Chrome Helper"
+    ]
+  },
+  {
+    "processName": "Google Chrome Helper",
+    "displayName": "Google Chrome Helper",
+    "whatItIs": "A Chrome renderer — one tab, frame, or extension running in its own process.",
+    "ownedBy": "Ships from Google (not part of macOS)",
+    "whenHotImplies": "A busy tab: video, animation, a heavy web app, or an ad. Elevated wake-ups and CPU here are normal for an active tab.",
+    "safetyTier": 2,
+    "safeAction": "Find the matching tab in Chrome's Task Manager and close it.",
+    "worstCase": "You lose that tab's unsaved state; the rest of Chrome is unaffected.",
+    "causallyLinked": [
+      "Google Chrome"
+    ]
+  },
+  {
+    "processName": "Slack",
+    "displayName": "Slack",
+    "whatItIs": "The Slack messaging client (an Electron app).",
+    "ownedBy": "Ships from Slack (not part of macOS)",
+    "whenHotImplies": "Loading a busy workspace, a call, or many unread channels. Electron apps idle heavier than native ones; sustained high CPU can mean a stuck call or a huge channel.",
+    "safetyTier": 2,
+    "safeAction": "Quit and reopen Slack, or reload the workspace (Cmd-R).",
+    "worstCase": "You'll close Slack; unsent drafts are kept.",
+    "causallyLinked": []
+  },
+  {
+    "processName": "zoom.us",
+    "displayName": "Zoom",
+    "whatItIs": "The Zoom video-conferencing app.",
+    "ownedBy": "Ships from Zoom (not part of macOS)",
+    "whenHotImplies": "An active call — video encoding is legitimately CPU-heavy. Outside a call, sustained high CPU is unusual and worth a restart.",
+    "safetyTier": 2,
+    "safeAction": "If you're not in a call, quit and reopen Zoom.",
+    "worstCase": "Quitting mid-call ends the call for you.",
+    "causallyLinked": []
+  },
+  {
+    "processName": "Code",
+    "displayName": "Visual Studio Code",
+    "whatItIs": "Visual Studio Code — Microsoft's code editor (an Electron app).",
+    "ownedBy": "Ships from Microsoft (not part of macOS)",
+    "whenHotImplies": "Indexing a large project, a busy extension, or a language server. High CPU often traces to one extension or a big file.",
+    "safetyTier": 2,
+    "safeAction": "Reload the window (Cmd-Shift-P ▸ Reload Window); disable a suspect extension if it recurs.",
+    "worstCase": "Reloading closes unsaved editors' undo history; files on disk are safe.",
+    "causallyLinked": []
+  },
+  {
+    "processName": "Spotify",
+    "displayName": "Spotify",
+    "whatItIs": "The Spotify music client (an Electron app).",
+    "ownedBy": "Ships from Spotify (not part of macOS)",
+    "whenHotImplies": "Playback, downloading, or scanning a large local library. Sustained high CPU while idle is unusual.",
+    "safetyTier": 2,
+    "safeAction": "Quit and reopen Spotify.",
+    "worstCase": "Playback stops; nothing is lost.",
+    "causallyLinked": []
+  },
+  {
+    "processName": "Notes",
+    "displayName": "Notes",
+    "whatItIs": "Apple Notes — the built-in note-taking app.",
+    "ownedBy": "Apple (bundled with macOS)",
+    "whenHotImplies": "Syncing many notes or loading large attachments. Prolonged high CPU can mean a sync conflict.",
+    "safetyTier": 2,
+    "safeAction": "Quit and reopen Notes.",
+    "worstCase": "You'll close Notes; edits are saved and synced.",
+    "causallyLinked": [
+      "cloudd"
+    ]
+  },
+  {
+    "processName": "Photos",
+    "displayName": "Photos",
+    "whatItIs": "Apple Photos — the built-in photo library.",
+    "ownedBy": "Apple (bundled with macOS)",
+    "whenHotImplies": "Analyzing the library (faces, scenes), syncing iCloud, or generating thumbnails after an import. This is normal after adding photos and settles on its own.",
+    "safetyTier": 2,
+    "safeAction": "Let it finish; it's usually one-time work. If stuck for hours, quit and reopen Photos.",
+    "worstCase": "You'll close Photos; the analysis resumes later.",
+    "causallyLinked": [
+      "photoanalysisd"
+    ]
+  },
+  {
+    "processName": "Music",
+    "displayName": "Music",
+    "whatItIs": "Apple Music — the built-in music app.",
+    "ownedBy": "Apple (bundled with macOS)",
+    "whenHotImplies": "Syncing the library, downloading, or updating cloud match. Sustained high CPU while idle is unusual.",
+    "safetyTier": 2,
+    "safeAction": "Quit and reopen Music.",
+    "worstCase": "Playback stops; nothing is lost.",
+    "causallyLinked": []
+  },
+  {
+    "processName": "Finder",
+    "displayName": "Finder",
+    "whatItIs": "The macOS Finder — the desktop, windows, and file management.",
+    "ownedBy": "Apple (core macOS — relaunches automatically)",
+    "whenHotImplies": "Copying many files, a slow network volume, or a stuck window. Finder relaunches cleanly, so it's safe to restart.",
+    "safetyTier": 1,
+    "safeAction": "Relaunch Finder (hold Option, right-click the Dock icon ▸ Relaunch).",
+    "worstCase": "Open Finder windows close and reopen; nothing is lost.",
+    "causallyLinked": []
+  },
+  {
+    "processName": "Docker Desktop",
+    "displayName": "Docker Desktop",
+    "whatItIs": "Docker Desktop — the container runtime UI and its Linux VM.",
+    "ownedBy": "Ships from Docker (not part of macOS)",
+    "whenHotImplies": "A busy container, a build, or the background VM. Docker's VM can hold significant CPU/memory; a runaway container is the usual cause.",
+    "safetyTier": 2,
+    "safeAction": "Check running containers (docker stats); stop the runaway one, or quit Docker Desktop.",
+    "worstCase": "Quitting stops all your containers.",
+    "causallyLinked": [
+      "com.docker.backend"
+    ]
+  },
+  {
+    "processName": "FaceTime",
+    "displayName": "FaceTime",
+    "whatItIs": "Apple's FaceTime video-calling app.",
+    "ownedBy": "Apple (bundled with macOS)",
+    "whenHotImplies": "An active call — video is CPU-heavy. Outside a call, high CPU is unusual.",
+    "safetyTier": 2,
+    "safeAction": "If you're not in a call, quit and reopen FaceTime.",
+    "worstCase": "Quitting mid-call ends the call.",
+    "causallyLinked": []
   }
 ]

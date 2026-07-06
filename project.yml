@@ -46,6 +46,53 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         CODE_SIGN_IDENTITY: "-"
 
+  # Phase 4: WidgetKit appex — the ambient status widget + Control Center
+  # controls. ExtensionKit extension (macOS 13+ WidgetKit form) embedded at
+  # Contents/Extensions/. Shares SharedIntents.swift with the app (same App
+  # Intents drive Siri/Shortcuts, the widget buttons, and Control Center) and
+  # the asset catalog (the StatusMark for the at-rest state).
+  AnomalousWidget:
+    type: extensionkit-extension
+    platform: macOS
+    sources:
+      - Widget/Sources
+      - App/Sources/SharedIntents.swift
+      - path: App/Resources/Assets.xcassets
+        buildPhase: resources
+    dependencies:
+      - package: AnomalousCore
+        product: AnomalousCore
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: Anomalous
+        # Keep in lockstep with the app target's versions below.
+        CFBundleShortVersionString: "0.1.4"
+        CFBundleVersion: "5"
+        EXAppExtensionAttributes:
+          EXExtensionPointIdentifier: com.apple.widgetkit-extension
+    # xcodegen REGENERATES this file each `xcodegen generate` — the content
+    # must live here, not in the file. Appexes must be sandboxed; the App
+    # Group is the only bridge to the app (status JSON in, commands out).
+    entitlements:
+      path: Widget/AnomalousWidget.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups:
+          - 7JQGQ7CRH8.bot.anomalous.sensor
+        # Shared HMAC key for the App Group command channel. Same access group
+        # + Team as the app → the widget can read the key the app minted;
+        # other-team/unsigned malware is denied. Non-managed entitlement
+        # ($(AppIdentifierPrefix) → team prefix), no provisioning profile.
+        keychain-access-groups:
+          - 7JQGQ7CRH8.bot.anomalous.sensor.shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: bot.anomalous.sensor.widget
+        SWIFT_VERSION: "6.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        CODE_SIGN_IDENTITY: "-"
+
   Anomalous:
     type: application
     platform: macOS
@@ -63,6 +110,8 @@ targets:
       - target: AnomalousHelper
         embed: false
         link: false
+      # The widget appex, embedded at Contents/Extensions/ (ExtensionKit).
+      - target: AnomalousWidget
     # Place the root helper at Contents/MacOS/AnomalousHelper and the
     # LaunchDaemon plist at Contents/Library/LaunchDaemons/, exactly where
     # SMAppService.daemon(plistName:) + the plist's BundleProgram expect them.
@@ -74,6 +123,29 @@ targets:
           mkdir -p "$APP/Contents/Library/LaunchDaemons"
           cp "$SRCROOT/App/LaunchDaemons/bot.anomalous.helper.plist" "$APP/Contents/Library/LaunchDaemons/"
           cp "$BUILT_PRODUCTS_DIR/AnomalousHelper" "$APP/Contents/MacOS/AnomalousHelper"
+    # xcodegen REGENERATES this file each `xcodegen generate` — the content
+    # must live here, not in the file. Phase 4 adds: the App Group shared
+    # with the widget appex (status JSON + command queue) and the Time
+    # Sensitive notification entitlement so a CONFIRMED (high-confidence)
+    # anomaly may break Focus. sign.sh applies this file at signing time.
+    entitlements:
+      path: App/Anomalous.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+        com.apple.security.application-groups:
+          - 7JQGQ7CRH8.bot.anomalous.sensor
+        # Shared HMAC key for the App Group command channel (see the widget
+        # target). The app mints it on first launch; the widget reads it.
+        keychain-access-groups:
+          - 7JQGQ7CRH8.bot.anomalous.sensor.shared
+        # Restored 2026-07-05: a confirmed (high-confidence) anomaly posts
+        # `.timeSensitive` to break Focus/DND. This is a MANAGED entitlement —
+        # it AMFI-kills the app at launch UNLESS a provisioning profile
+        # carrying it is embedded in the bundle. sign.sh embeds
+        # App/Anomalous.provisionprofile (App ID bot.anomalous.sensor, valid to
+        # 2044) as Contents/embedded.provisionprofile. The entitlement here MUST
+        # remain a subset of that profile's entitlements or launch fails.
+        com.apple.developer.usernotifications.time-sensitive: true
     info:
       path: App/Info.plist
       properties:

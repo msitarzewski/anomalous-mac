@@ -2,10 +2,12 @@ import Foundation
 
 /// How a surfaced anomaly left the active list.
 public enum AnomalyResolution: String, Codable, Sendable {
-    case recovered  // the process returned to normal on its own
-    case ended      // the process exited
-    case dismissed  // the user dismissed the card
-    case actioned   // the user took the offered action (quit / stop / restart)
+    case recovered     // the process returned to normal on its own
+    case ended         // the process exited
+    case dismissed     // the user dismissed the card
+    case actioned      // the user took the offered action (quit / stop / restart)
+    case acknowledged  // "normal for me" — the envelope was raised (Phase 4)
+    case snoozed       // time-boxed snooze; re-surfaces on expiry if still active
 
     public var label: String {
         switch self {
@@ -13,7 +15,19 @@ public enum AnomalyResolution: String, Codable, Sendable {
         case .ended: return "Process ended"
         case .dismissed: return "Dismissed"
         case .actioned: return "Handled"
+        case .acknowledged: return "Marked normal"
+        case .snoozed: return "Snoozed"
         }
+    }
+
+    // Codable back-compat, both directions: an old journal file always
+    // decodes (its values are a subset), and a journal written by a NEWER
+    // build with cases this build doesn't know must not nuke the whole
+    // history — unknown raw values degrade to `.dismissed` instead of
+    // throwing (the AnomalyJournal snapshot decode is all-or-nothing).
+    public init(from decoder: any Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = AnomalyResolution(rawValue: raw) ?? .dismissed
     }
 }
 
