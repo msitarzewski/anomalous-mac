@@ -373,6 +373,15 @@ struct DiagnosisCardView: View {
     /// the "Sourced by Anomalous" attribution (never color alone — an icon
     /// carries it too); cited sources are links, like the expert result. A
     /// genuinely-unknown card with discovery OFF gets a per-card "Look it up".
+    /// Caption for an unverified research answer, by research confidence.
+    private static func researchedCaption(_ confidence: String?) -> String {
+        switch confidence?.lowercased() {
+        case "high": return "Research answer — high confidence, not yet verified"
+        case "medium": return "Research answer — medium confidence, not yet verified"
+        default: return "Research answer — not yet verified"
+        }
+    }
+
     @ViewBuilder
     private var discoveryRow: some View {
         switch judged.discovery {
@@ -389,6 +398,20 @@ struct DiagnosisCardView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.blue)
                     .accessibilityLabel("This answer was sourced by Anomalous")
+                ForEach(judged.discoverySources, id: \.url) { src in
+                    Link(destination: URL(string: src.url) ?? URL(string: "https://anomalous.bot")!) {
+                        Label(src.note, systemImage: "link").font(.caption)
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.top, 2)
+        case .researched(let confidence):
+            VStack(alignment: .leading, spacing: 4) {
+                Label(Self.researchedCaption(confidence), systemImage: "magnifyingglass.circle")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Research answer, not yet independently verified")
                 ForEach(judged.discoverySources, id: \.url) { src in
                     Link(destination: URL(string: src.url) ?? URL(string: "https://anomalous.bot")!) {
                         Label(src.note, systemImage: "link").font(.caption)

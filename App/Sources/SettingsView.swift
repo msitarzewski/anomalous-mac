@@ -1,6 +1,7 @@
 import SwiftUI
 import ServiceManagement
 import AppKit
+import CryptoKit
 import AnomalousCore
 
 /// Standard Settings scene (⌘,) — the HIG home for a menu-bar app's
@@ -10,6 +11,12 @@ struct SettingsView: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var inviteCode = ""
     @State private var accountEmail = ""
+    @AppStorage(AppState.devServerEnabledKey) private var devServerEnabled = false
+    @AppStorage(AppState.devServerURLKey) private var devServerURL = AppState.defaultDevServer
+    @AppStorage(AppState.devUnlockedKey) private var devUnlocked = false
+    @State private var showUnlock = false
+    @State private var devPassword = ""
+    @State private var unlockFailed = false
 
     var body: some View {
         TabView {
@@ -324,14 +331,72 @@ struct SettingsView: View {
             }
 
             Section("Where your data goes") {
+                // OPTION-click the server value reveals the developer unlock —
+                // and only option-click. A plain click does nothing, so a normal
+                // user never trips a password prompt; the anchor is the server
+                // URL because that's exactly what dev mode changes. The gate only
+                // HIDES dev UI; the real safety is the loopback-only override.
+                LabeledContent("Server", value: appState.serverDescription)
+                    .contentShape(Rectangle())
+                    .gesture(TapGesture().modifiers(.option).onEnded {
+                        if !devUnlocked { showUnlock = true }
+                    })
                 Text("All detection, baselines, and judgment run on this Mac. Acknowledgments, baselines, and the journal never leave it. Only anonymous anomaly signatures are sent (if you opted in), and every byte is in the send log.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Link("Full network disclosure (NETWORK.md)",
                      destination: URL(string: "https://github.com/msitarzewski/anomalous-mac/blob/main/NETWORK.md")!)
             }
+
+            if showUnlock && !devUnlocked {
+                Section("Developer access") {
+                    SecureField("Developer password", text: $devPassword)
+                        .onSubmit(attemptUnlock)
+                    Button("Unlock") { attemptUnlock() }
+                    if unlockFailed {
+                        Text("Incorrect password.").font(.footnote).foregroundStyle(.red)
+                    }
+                }
+            }
+
+            if devUnlocked {
+                Section("Developer") {
+                    Toggle("Use a local dev server", isOn: $devServerEnabled)
+                    if devServerEnabled {
+                        TextField("Dev server URL", text: $devServerURL, prompt: Text(AppState.defaultDevServer))
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                            .textContentType(.URL)
+                        if !AppState.isAllowedOverride(devServerURL) {
+                            Label("This build only accepts a localhost address.", systemImage: "exclamationmark.triangle")
+                                .font(.footnote).foregroundStyle(.orange)
+                        }
+                    }
+                    Text("Point the app at your own machine to test account and Get Help against a local server. Account and Get Help calls switch on the next request; quit and reopen to fully apply. A release build only accepts a localhost address.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Button("Lock developer features", role: .destructive) {
+                        devUnlocked = false
+                        showUnlock = false
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
         .padding()
+    }
+
+    /// Compare the typed password's hash against the baked blob. Never stores or
+    /// recovers the password. SHA-256 of "ANOMALOUS_DEV::" + input.
+    private func attemptUnlock() {
+        let hash = SHA256.hash(data: Data(("ANOMALOUS_DEV::" + devPassword).utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        if hash == AppState.devPasswordHash {
+            devUnlocked = true
+            showUnlock = false
+            devPassword = ""
+            unlockFailed = false
+        } else {
+            unlockFailed = true
+        }
     }
 
     private var privacy: some View {

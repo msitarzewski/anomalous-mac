@@ -150,36 +150,34 @@ enum PrivilegedSampler {
         }
     }
 
-    /// Processes the root helper will NEVER signal, whatever the caller asks —
-    /// a root SIGTERM to these is a system denial-of-service (or disabling
-    /// security tooling), never anomaly remediation. `pid <= 1` covers
-    /// kernel_task (0) and launchd (1); the name set covers other load-bearing
-    /// system/security processes a caller could target by first learning their
-    /// live start time from `sampleAll()`.
-    private static let protectedNames: Set<String> = [
-        "launchd", "kernel_task", "WindowServer", "loginwindow", "logind",
-        "securityd", "syslogd", "notifyd", "opendirectoryd", "coreauthd",
-        "trustd", "syspolicyd", "endpointsecurityd", "sysmond", "watchdogd",
-    ]
-
-    /// Root-authorized termination. Defense in depth: (1) never signal pid ≤ 1,
-    /// (2) the pid-reuse guard — re-read the live start time and refuse on
-    /// mismatch, (3) never signal a protected critical/system process. The
-    /// helper does NOT trust the caller's pid to be a legitimate target.
+    /// Root-authorized termination. The helper does the impure work — re-read
+    /// the live start time, read the process name, issue the SIGTERM — but the
+    /// AUTHORIZATION decision is the shared, unit-tested `TerminationGuard`
+    /// policy (pid ≤ 1, pid-reuse guard, protected-process denylist). The helper
+    /// does NOT trust the caller's pid to be a legitimate target.
     static func terminate(pid: Int32, expectedStartAbsTime: UInt64) -> Int32 {
-        guard pid > 1 else { return 5 } // protected: kernel_task(0) / launchd(1)
-        guard let live = Collector.rusage(for: pid) else { return 2 } // no such process
-        guard live.startAbsTime == expectedStartAbsTime else { return 1 } // identity changed
+        let liveStart = Collector.rusage(for: pid)?.startAbsTime
 
         var nameBuffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         proc_name(pid, &nameBuffer, UInt32(nameBuffer.count))
         let name = String(decoding: nameBuffer.prefix(while: { $0 != 0 }).map(UInt8.init(bitPattern:)), as: UTF8.self)
-        guard !protectedNames.contains(name) else { return 5 } // protected critical process
+
+        let verdict = TerminationGuard.decide(
+            pid: pid,
+            expectedStartAbsTime: expectedStartAbsTime,
+            liveStartAbsTime: liveStart,
+            name: name
+        )
+        guard verdict == .allowed else { return verdict.rawValue }
 
         guard kill(pid, SIGTERM) == 0 else {
-            switch errno { case EPERM: return 3; case ESRCH: return 2; default: return 4 }
+            switch errno {
+            case EPERM: return TerminationVerdict.notPermitted.rawValue
+            case ESRCH: return TerminationVerdict.noSuchProcess.rawValue
+            default: return TerminationVerdict.unsupported.rawValue
+            }
         }
-        return 0
+        return TerminationVerdict.allowed.rawValue
     }
 
     static func owner(_ pid: pid_t) -> uid_t? {

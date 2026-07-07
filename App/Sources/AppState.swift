@@ -27,6 +27,10 @@ final class AppState {
         /// The card was upgraded from an Anomalous-sourced assessment — the
         /// "Sourced by Anomalous" attribution shows.
         case sourced
+        /// Research produced a confident answer the independent verifier couldn't
+        /// clear for the corpus. The card shows the answer, captioned as
+        /// unverified research at the given confidence ("high"/"medium").
+        case researched(confidence: String?)
         /// The API honestly couldn't identify it — keep the unknown card.
         case notRecognized
         case failed(String)
@@ -147,7 +151,60 @@ final class AppState {
     }
 
     private var serverBaseURL: URL {
-        URL(string: ProcessInfo.processInfo.environment["ANOMALOUS_SERVER"] ?? "https://api.anomalous.bot")!
+        URL(string: Self.resolvedServer)!
+    }
+
+    /// UserDefaults keys for the HIDDEN developer switch (revealed by an
+    /// option-click in Settings › Transparency, then a password). The dev
+    /// server override only applies once dev features are unlocked — a normal
+    /// user, who never unlocks, is always on production regardless of these
+    /// keys. The account + escalation ("Get Help") calls read `serverBaseURL`
+    /// live, so flipping the server takes effect on the next request; the
+    /// ingest/corpus clients are built at init, so a relaunch fully applies.
+    static let devUnlockedKey = "devUnlocked"
+    static let devServerEnabledKey = "devServerEnabled"
+    static let devServerURLKey = "devServerURL"
+    static let defaultDevServer = "http://localhost:8091"
+
+    /// One-way hash of the developer password, baked into the app. The Settings
+    /// unlock hashes what the user types (SHA-256 of "ANOMALOUS_DEV::" + input)
+    /// and compares to this — the password itself is never stored or
+    /// recoverable. This gate HIDES dev UI from normal users; it is not a
+    /// security boundary (the binary is on-device). The actual safety is the
+    /// loopback-only `isAllowedOverride`. Placeholder below never matches a real
+    /// password — dev features stay locked until the real hash is baked in.
+    static let devPasswordHash = "efc84df9fc799a353a6981cc57541b3644e7bbf47dcda7c02c4215b510bc1c50"
+
+    /// The server the app talks to, resolved in order: (1) the ANOMALOUS_SERVER
+    /// env var (scripted/dev launches), (2) the developer override — ONLY when
+    /// dev features are unlocked AND the switch is on, (3) production. The
+    /// override is restricted to a LOOPBACK host in release builds — a shipped
+    /// app can only ever be pointed at the user's OWN machine for local testing,
+    /// never redirected to a rogue remote that would capture the account token
+    /// and triage payloads.
+    static var resolvedServer: String {
+        if let env = ProcessInfo.processInfo.environment["ANOMALOUS_SERVER"], !env.isEmpty {
+            return env
+        }
+        let defaults = UserDefaults.standard
+        if defaults.bool(forKey: devUnlockedKey), defaults.bool(forKey: devServerEnabledKey) {
+            let url = defaults.string(forKey: devServerURLKey) ?? defaultDevServer
+            if !url.isEmpty, isAllowedOverride(url) { return url }
+        }
+        return "https://api.anomalous.bot"
+    }
+
+    /// Guard the override so a release build can't be aimed at an arbitrary
+    /// remote host. Delegates to the shared, unit-tested `ServerOverridePolicy`;
+    /// this wrapper only supplies the build configuration. Debug builds allow
+    /// any host (LAN dev servers, etc.); release builds are loopback-only.
+    static func isAllowedOverride(_ urlString: String) -> Bool {
+        #if DEBUG
+        let isDebug = true
+        #else
+        let isDebug = false
+        #endif
+        return ServerOverridePolicy.isAllowedOverride(urlString, isDebug: isDebug)
     }
 
     /// Account token for paid triage escalation. Empty until the user signs
@@ -361,7 +418,7 @@ final class AppState {
     private let thresholds: DetectionThresholds
 
     init() {
-        let server = ProcessInfo.processInfo.environment["ANOMALOUS_SERVER"] ?? "https://api.anomalous.bot"
+        let server = Self.resolvedServer
         // Fail-closed by default: an unsigned or unverifiable corpus feed is
         // rejected and the last verified corpus (or the shipped map alone)
         // stands. ANOMALOUS_ALLOW_UNSIGNED_FEED=1 is the dev override for a
@@ -957,6 +1014,7 @@ final class AppState {
         guard force || discoveryEnabled else { return }
         if case .researching = judged.discovery { return }
         if case .sourced = judged.discovery { return }
+        if case .researched = judged.discovery { return }
         let lineage = BaselineStore.key(for: judged.anomaly.identity)
 
         // Dedup by lineage (not card id). A forced tap always re-asks.
@@ -965,12 +1023,16 @@ final class AppState {
             case .researching:
                 setDiscovery(.researching, id: judged.id)   // reflect the in-flight one
                 return
-            case .sourced, .notRecognized, .failed:
+            case .sourced, .researched, .notRecognized:
                 if Date.now.timeIntervalSince(record.at) < Self.discoveryTTL {
-                    setDiscovery(record.state, id: judged.id)   // reuse the outcome
+                    setDiscovery(record.state, id: judged.id)   // reuse the real outcome
                     return
                 }
-            case .none:
+            case .failed, .none:
+                // A failed lookup (timeout / unreachable) is NOT cached: a later
+                // tick re-fires so a slow research (the server may still be
+                // working, and now returns confident answers) eventually
+                // resolves — instead of sitting on the failure for the whole TTL.
                 break
             }
         }
@@ -998,11 +1060,13 @@ final class AppState {
                     self.resolveDiscovery(.notRecognized, lineage: lineage, id: id)
                     return
                 }
-                // Bounded poll (~60s @ 3s). Runs to a terminal state even if the
-                // popover closed or the card re-flagged — so the lineage cache
-                // always resolves and no lookup is ever left "in flight" forever.
-                for _ in 0..<20 {
-                    try await Task.sleep(for: .seconds(3))
+                // Poll to a terminal state, long enough for research +
+                // verification (~1–2 min): 3s early, then 6s (≈180s total). On
+                // timeout the failure is NOT cached (see the fireDiscovery
+                // dedup), so a later tick re-polls a still-working lookup instead
+                // of leaving the user on "unknown" while an answer is coming.
+                for attempt in 0..<40 {
+                    try await Task.sleep(for: .seconds(attempt < 20 ? 3 : 6))
                     let result = try await self.discoveryClient.poll(discoveryID: discoveryID)
                     switch result.status {
                     case .complete:
@@ -1050,7 +1114,11 @@ final class AppState {
     private func applyDiscovery(_ assessment: DiscoveryClient.Assessment, id: UUID, baseline: String, anomaly: Anomaly) {
         guard let i = anomalies.firstIndex(where: { $0.id == id }) else { return }
         let card = assessment.card(baselineSentence: baseline)
-        let resolved: DiscoveryState = assessment.isSourcedByAnomalous ? .sourced : .notRecognized
+        // A verified corpus answer is "Sourced by Anomalous"; a confident but
+        // unverified research answer is shown with an honest caveat.
+        let resolved: DiscoveryState = assessment.isUnverifiedResearch
+            ? .researched(confidence: assessment.confidence)
+            : .sourced
         anomalies[i].card = card
         anomalies[i].discovery = resolved
         anomalies[i].discoverySources = assessment.sources

@@ -66,6 +66,9 @@ public struct DiscoveryClient: Sendable {
         public let sources: [Source]
         public let source: String
         public let verified: Bool
+        /// Research self-assessed confidence ("high"/"medium") for an UNVERIFIED
+        /// answer the server returned anyway; nil for verified/corpus results.
+        public let confidence: String?
 
         enum CodingKeys: String, CodingKey {
             case whatItIs = "what_it_is"
@@ -76,6 +79,7 @@ public struct DiscoveryClient: Sendable {
             case sources
             case source
             case verified
+            case confidence
         }
 
         public init(from decoder: any Decoder) throws {
@@ -88,12 +92,13 @@ public struct DiscoveryClient: Sendable {
             sources = try c.decodeIfPresent([Source].self, forKey: .sources) ?? []
             source = try c.decodeIfPresent(String.self, forKey: .source) ?? "anomalous"
             verified = try c.decodeIfPresent(Bool.self, forKey: .verified) ?? false
+            confidence = try c.decodeIfPresent(String.self, forKey: .confidence)
         }
 
         public init(
             whatItIs: String, whyHot: String?, isThisNormal: String,
             suggestedAction: String?, safetyTier: Int, sources: [Source],
-            source: String, verified: Bool
+            source: String, verified: Bool, confidence: String? = nil
         ) {
             self.whatItIs = whatItIs
             self.whyHot = whyHot
@@ -103,11 +108,17 @@ public struct DiscoveryClient: Sendable {
             self.sources = sources
             self.source = source
             self.verified = verified
+            self.confidence = confidence
         }
 
         /// Whether this assessment is grounded by Anomalous research (vs a
         /// locally-composed card) — drives the "Sourced by Anomalous" label.
         public var isSourcedByAnomalous: Bool { source == "anomalous" }
+
+        /// A confident-but-unverified research answer (returned to the requester
+        /// but not published to the corpus) — captioned distinctly from a
+        /// verified "Sourced by Anomalous" result.
+        public var isUnverifiedResearch: Bool { !verified && source == "research" }
 
         /// Map into a `DiagnosisCard`. The detector's own baseline sentence
         /// (with the numbers) stays as `isThisNormal` — the card's prominent

@@ -72,6 +72,25 @@ Coordinated disclosure, **90-day** default. If a fix needs longer, the reporter 
 - Telemetry is **anonymous by schema** (published in `protocol/`), never account-linked; the send log is diffable against this source.
 - Developer ID signed, hardened runtime, notarized; the helper is embedded and signed inside-out.
 
+### Root helper trust model
+
+The privileged helper (root, via `SMAppService`) is built so its safety does **not** depend on the app — or any server — being trustworthy. The load-bearing protections live in the root binary itself:
+
+- **No server path.** The helper never contacts any network service; it only vends XPC to the app. Which server the app talks to (production, or a local dev server) has no bearing on the helper.
+- **Client pinning.** It accepts XPC only from a caller signed by Team `7JQGQ7CRH8` with bundle id `bot.anomalous.sensor` — the genuine app, not any other local process. This is enforced by macOS at runtime (`NSXPCConnection.setCodeSigningRequirement`); it is an OS property, not something an in-process unit test exercises.
+- **Local kill target.** The pid to terminate comes from the app's on-device detection, never from a server; a server cannot inject a pid.
+- **Independent refusal.** The authorization decision is the shared, **unit-tested** `TerminationGuard` policy — the same pure function the root helper calls before any `kill()`. It takes no "safety tier" as input: it refuses `pid ≤ 1`, enforces the pid-reuse guard (live start time must match the caller's), and refuses a hard denylist of critical processes (launchd, kernel_task, WindowServer, loginwindow, securityd, trustd, endpointsecurityd, …), whatever the app or a diagnosis card claims. Every one of those refusals is covered by a passing test.
+- **Signed corpus.** The knowledge feed that grounds diagnosis cards is Ed25519-verified and fail-closed; an unsigned or altered feed is rejected — including, by test, a feed whose `safety_tier` was tampered from 3 to 1.
+
+The most a compromised or malicious *diagnosis source* can do is cause a **Stop** action to be *offered* (via a rosy safety tier) for a **non-protected**, already-detected root process — a user-in-the-loop nudge the helper's denylist and pid guard still bound. It cannot choose an arbitrary target, kill a protected process, or reach the helper without the genuine app. In release builds it additionally must be on loopback (see below) — i.e. an attacker already executing code on the machine.
+
+### Developer mode
+
+A hidden developer switch (Settings → Transparency → **option-click the server value** → password) can point the app at a **local** server for testing.
+
+- **Loopback-only in release.** A release build honours a dev-server override only for a localhost address — a shipped app can be aimed at the user's *own* machine, never redirected to a remote host that would capture the account token or triage payloads. The allowlist is a shared, **unit-tested** policy (`ServerOverridePolicy`): the release configuration is asserted to reject a remote host.
+- **The gate is UI-hiding, not a security boundary.** The unlock is a persisted preference (`devUnlocked`) compared against a password hash baked into the binary. It keeps developer UI out of normal users' way and remembers the choice — but it is trivially set with `defaults write bot.anomalous.sensor devUnlocked -bool true` and is **not** meant to withstand a determined local user. The real safety is the loopback restriction above, which holds regardless of the flag.
+
 ## Hall of Fame
 
 Reporters who have responsibly disclosed security issues:
