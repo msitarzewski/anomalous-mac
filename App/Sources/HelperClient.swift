@@ -80,6 +80,31 @@ private final class HelperConnection: @unchecked Sendable {
             }
         }
     }
+
+    /// The running helper's build version, or nil if unreachable. Connecting to
+    /// the Mach service on-demand-launches the daemon, so this also boots a
+    /// freshly-relaunched helper after a restart.
+    func version() async -> String? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            let once = ResumeOnce(continuation)
+            guard let proxy = makeProxy(onError: { _ in once.resume(nil) }) else { once.resume(nil); return }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { once.resume(nil) }
+            proxy.version { once.resume($0) }
+        }
+    }
+
+    /// Ask a stale helper to exit (launchd relaunches the updated binary). False
+    /// if the running helper predates this verb or is unreachable.
+    func restartForUpdate() async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let once = ResumeOnce(continuation)
+            guard let proxy = makeProxy(onError: { _ in once.resume(false) }) else { once.resume(false); return }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { once.resume(false) }
+            proxy.restartForUpdate { once.resume($0) }
+        }
+    }
+
+    func invalidateConnection() { invalidate() }
 }
 
 /// App-side of the privileged helper: installs it (one System Settings
@@ -173,6 +198,23 @@ final class HelperClient {
         transport.invalidate()
         active = false
         refreshStatus()
+    }
+
+    /// Self-heal a stale root helper after an app update — no user action, no
+    /// password, no re-approval. If the installed helper reports a version
+    /// other than the one this build expects, ask it to restart (it exits;
+    /// launchd relaunches the UPDATED on-disk binary), drop the connection, and
+    /// reconnect — the on-demand launch spins up the current binary. Returns
+    /// true when the helper is (or becomes) current. A helper too old to have
+    /// the restart verb returns false; one manual restart bridges that single
+    /// transition, and every future update self-heals from then on.
+    func reconcileVersion() async -> Bool {
+        guard case .installed = status else { return false }
+        guard let running = await transport.version() else { return false }
+        if running == HelperConstants.version { return true }
+        _ = await transport.restartForUpdate()
+        transport.invalidateConnection()
+        return await transport.version() == HelperConstants.version
     }
 
     /// Root-wide sample, or nil if the helper is unavailable (caller falls

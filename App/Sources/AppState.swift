@@ -153,12 +153,17 @@ final class AppState {
     /// Account token for paid triage escalation. Empty until the user signs
     /// in (Settings). Escalation UI only appears when this is set — the
     /// account-linked paid path never fires anonymously.
-    // Stored in the Keychain, not UserDefaults — it's a credential (the paid
+    // Persisted in the Keychain, not UserDefaults — it's a credential (the paid
     // account bearer token), and a UserDefaults plist is readable by any
-    // process with the user's file access.
-    var accountToken: String {
-        get { Keychain.string(for: "accountToken") ?? "" }
-        set { Keychain.set(newValue, for: "accountToken") }
+    // process with the user's file access. But the value must ALSO be a tracked
+    // stored property, not a bare Keychain-backed computed one: under
+    // @Observable, writes to a computed property are invisible to SwiftUI, so a
+    // token pasted into the Settings SecureField never re-enabled the "Verify"
+    // button (it stayed .disabled on a stale empty read). Stored + didSet keeps
+    // the Keychain as the durable store while making edits observable. The
+    // initializer seeds from the Keychain; didSet does not fire during init.
+    var accountToken: String = Keychain.string(for: "accountToken") ?? "" {
+        didSet { Keychain.set(accountToken, for: "accountToken") }
     }
     var canEscalate: Bool { !accountToken.isEmpty }
 
@@ -295,6 +300,9 @@ final class AppState {
     /// Root helper — when installed, sampling covers root daemons (dasd,
     /// WindowServer, kernel_task…) the unprivileged collector can't see.
     let helper = HelperClient()
+    /// One-time-per-session guard: reconcile a stale helper (post-update version
+    /// skew) exactly once, before the first root sample benefits from it.
+    private var helperReconciled = false
     private let ingestClient: IngestClient
     /// Anonymous, opt-in identity research for genuinely-unknown processes —
     /// same send-log/attestation pattern as ingest.
@@ -530,6 +538,11 @@ final class AppState {
         guard !ticking else { return }
         ticking = true
         defer { ticking = false }
+        // Re-evaluate backoff every tick, not only on system notifications: a
+        // thermal cool-down (or Low Power Mode toggle) whose notification the
+        // app missed would otherwise leave backoff stuck ON — skipping the
+        // helper probe forever and making system-wide monitoring look off.
+        updateBackoff()
         await baselineStore.loadIfNeeded()
         await ackStore.loadIfNeeded()
         if !journalLoaded {
@@ -541,6 +554,15 @@ final class AppState {
         // distributed notification is best-effort; the tick is the backstop).
         await applyWidgetCommands()
         helper.refreshStatus()
+        // Self-heal a stale helper left by an app update (version skew) once per
+        // session, BEFORE sampling — so a fresh build starts watching root
+        // daemons again with no user action instead of silently falling back to
+        // user-only. A pre-feature helper can't self-restart; that one
+        // transition needs a manual restart, then every update self-heals.
+        if !helperReconciled, case .installed = helper.status {
+            helperReconciled = true
+            _ = await helper.reconcileVersion()
+        }
         // Corpus refresh (fire-and-forget, idempotent under 24h): on an
         // update, re-merge over the shipped map so new reviewed identities
         // ground cards mid-session. Failures are silent — the last verified

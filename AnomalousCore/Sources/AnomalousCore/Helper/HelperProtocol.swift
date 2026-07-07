@@ -28,6 +28,15 @@ import Foundation
     /// Helper build version — lets the app detect a stale installed helper
     /// after an update and re-register.
     func version(withReply reply: @escaping (String) -> Void)
+
+    /// Ask a stale helper to exit so launchd relaunches it from the (updated)
+    /// on-disk binary — self-healing the version skew that follows an app
+    /// update, with NO user action, password, or re-approval. The app calls
+    /// this only when `version()` != its own expected version. Safe by
+    /// construction: it does nothing but restart the helper itself, and only
+    /// our pinned client (clientRequirement) can reach it. The reply is sent
+    /// before the process exits.
+    func restartForUpdate(withReply reply: @escaping (Bool) -> Void)
 }
 
 /// Shared identifiers so the app, the helper, and the LaunchDaemon plist
@@ -38,8 +47,12 @@ public enum HelperConstants {
     public static let machServiceName = "bot.anomalous.helper"
     /// The LaunchDaemon plist basename registered via SMAppService.daemon.
     public static let daemonPlistName = "bot.anomalous.helper.plist"
-    /// Bumped on every helper change so the app can spot a stale install.
-    public static let version = "0.1.5"
+    /// Bumped on every helper change — including any change to the wire model
+    /// (ProcessSample/ProcessIdentity) — so the app can spot a stale installed
+    /// helper after an update and self-heal it (see restartForUpdate). Treat
+    /// this like the helper's build number: if it can go out of sync with the
+    /// app, bump it.
+    public static let version = "0.1.6"
 
     /// Apple Developer Team ID. The root helper accepts XPC connections ONLY
     /// from clients signed by this team — so a malicious local process can't

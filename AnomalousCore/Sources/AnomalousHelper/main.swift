@@ -67,6 +67,18 @@ final class HelperService: NSObject, AnomalousHelperProtocol {
     func version(withReply reply: @escaping (String) -> Void) {
         reply(HelperConstants.version)
     }
+
+    func restartForUpdate(withReply reply: @escaping (Bool) -> Void) {
+        // Ack first, then exit after a short beat so the reply flushes over XPC.
+        // launchd owns this Mach service (RunAtLoad + on-demand), so the daemon
+        // is relaunched — now from the UPDATED on-disk binary — on the app's
+        // next connection. This is the whole self-heal: a stale helper steps
+        // aside and its replacement is the current build.
+        reply(true)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
+            exit(0)
+        }
+    }
 }
 
 // MARK: - Probe (standalone verification)

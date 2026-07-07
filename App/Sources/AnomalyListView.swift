@@ -65,7 +65,13 @@ struct AnomalyListView: View {
     /// without it, Anomalous can't see root daemons like dasd.
     @ViewBuilder
     private var helperBanner: some View {
-        if !appState.helper.active {
+        // Nudge to enable/approve ONLY when the helper isn't set up. A helper
+        // that IS installed but momentarily inactive — thermal/low-power backoff
+        // skips the root probe, or a single XPC miss — must not nag "Enable
+        // system-wide monitoring"; it's already enabled and the next
+        // unconstrained tick re-engages it. Keying on `active` (a
+        // last-sample-succeeded flag) is what made backoff look uninstalled.
+        if appState.helper.status != .installed {
             VStack(alignment: .leading, spacing: 6) {
                 Divider().padding(.top, 8)
                 HStack(alignment: .top, spacing: 8) {

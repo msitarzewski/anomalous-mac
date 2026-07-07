@@ -9,11 +9,22 @@ import Security
 enum Keychain {
     private static let service = "bot.anomalous.sensor"
 
+    /// Pin the item to an EXPLICIT, stable access group instead of relying on
+    /// the process's default group. Without this, the token lands in whatever
+    /// the first `keychain-access-groups` entry happens to be at sign time — so
+    /// a change in the entitlement (or dev re-sign churn) writes it to one group
+    /// and reads it from another, and the token silently "disappears" after an
+    /// update. The team-prefixed literal is required: `$(AppIdentifierPrefix)`
+    /// is NOT expanded when codesign applies entitlements. Must match a group in
+    /// the app's keychain-access-groups entitlement.
+    private static let accessGroup = "7JQGQ7CRH8.bot.anomalous.sensor.shared"
+
     static func string(for account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
+            kSecAttrAccessGroup as String: accessGroup,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
@@ -30,6 +41,7 @@ enum Keychain {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
+            kSecAttrAccessGroup as String: accessGroup,
         ]
 
         // Empty string clears the credential.
