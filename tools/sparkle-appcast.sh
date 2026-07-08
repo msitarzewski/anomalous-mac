@@ -21,8 +21,10 @@
 #   1. Build Release, then tools/sign.sh + tools/notarize.sh + tools/make-dmg.sh
 #      so ./dist holds the signed+notarized DMG(s).
 #   2. ./tools/sparkle-appcast.sh                 # signs DMGs, writes dist/appcast.xml
-#   3. Publish dist/appcast.xml + the .dmg to anomalous.bot
-#      (copy them to the host serving anomalous.bot; NOT auto-deployed).
+#   3. ./tools/publish-release.sh                 # scp DMG(s)+appcast to prod, verify
+#      Publishes to michael@umacbookpro:/home/michael/Sites/api.anomalous.bot/public/
+#      — the docroot Caddy serves anomalous.bot from since the Laravel cutover.
+#      (NOT auto-deployed; artifacts are untracked there, so app deploys leave them.)
 #
 # Usage:
 #   ./tools/sparkle-appcast.sh [dist_dir]           # default: ./dist
