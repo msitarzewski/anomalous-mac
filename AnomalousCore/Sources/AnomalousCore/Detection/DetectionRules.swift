@@ -99,6 +99,18 @@ public struct DetectionThresholds: Sendable {
     /// Sustained CPU: average percent over the window that flags. (Rule 1)
     public var sustainedCPUPercent: Double = 80
     public var sustainedCPUWindow: TimeInterval = 25 * 60
+    /// Chronic CPU (Rule 1b): a process whose ROBUST TYPICAL CPU — the median
+    /// of its instantaneous CPU over the reservoir window — sits at/above this
+    /// floor has been hot the whole time we've watched it. This is the
+    /// baseline-poisoning blind spot: a runaway that predates a clean baseline
+    /// never SPIKES above the 80% live bar and never DEVIATES from its own
+    /// (now-poisoned) baseline, so Rules 1 and the Δ-rules both miss it. The
+    /// floor is absolute and lower than sustainedCPUPercent because ~50%+
+    /// sustained for a background process is pathological even though it never
+    /// hits 80% — and being absolute, a poisoned per-lineage baseline cannot
+    /// suppress it. Ship conservative; the ack envelope silences a user's own
+    /// known-heavy app ("normal for me").
+    public var chronicCPUPercent: Double = 50
     /// Cumulative-time ratio: cputime/uptime that flags with minimum uptime.
     /// This alone would have flagged dasd on FIRST LAUNCH of the app —
     /// it catches pre-existing runaways. (Rule 2, the founding incident)
@@ -256,6 +268,33 @@ public enum DetectionRules {
             detectedAt: last.timestamp,
             drivingMetric: BaselineMetric.cpuPercent.rawValue,
             baselineDeviation: robust.map { RobustMath.deviation(average, from: $0) }
+        )
+    }
+
+    /// Rule 1b: CHRONIC CPU — the baseline-poisoning catch. Keys on the ROBUST
+    /// MEDIAN of the lineage's instantaneous CPU over the reservoir window: if a
+    /// process's *typical* CPU is itself pathological (≥ chronicCPUPercent), the
+    /// process has been a runaway since before a healthy baseline could form.
+    /// That is exactly the case Rule 1 (needs an 80% live spike) and the Δ-rules
+    /// (need deviation from a baseline the runaway has already poisoned) both
+    /// miss. Absolute and baseline-independent — the poisoned baseline is the
+    /// signal, not the excuse. The median (not the mean) keeps a single idle dip
+    /// or spike from moving the verdict. `robust` is only non-nil once the
+    /// reservoir has enough observations, so this can't fire on a cold process.
+    public static func chronicCPUAnomaly(
+        robust: RobustStats?,
+        sample: ProcessSample,
+        thresholds: DetectionThresholds = .init()
+    ) -> Anomaly? {
+        guard let robust, robust.median >= thresholds.chronicCPUPercent else { return nil }
+        return Anomaly(
+            kind: .sustainedCPU,
+            identity: sample.identity,
+            windowSeconds: thresholds.sustainedCPUWindow,
+            magnitudeCurve: [robust.median],
+            baselineValue: robust.median,
+            detectedAt: sample.timestamp,
+            drivingMetric: BaselineMetric.cpuPercent.rawValue
         )
     }
 

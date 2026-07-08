@@ -424,3 +424,28 @@ struct KnowledgeMapTests {
         #expect(card.causallyLinkedProcesses.isEmpty)
     }
 }
+
+@Suite("chronic CPU — the baseline-poisoning catch")
+struct ChronicCPUTests {
+    @Test("flags a process whose robust median CPU is itself pathological (poisoned baseline, e.g. appstoreagent ~62%)")
+    func flagsChronicRunaway() {
+        let robust = RobustStats(median: 62, mad: 5, count: 40)
+        let anomaly = DetectionRules.chronicCPUAnomaly(
+            robust: robust,
+            sample: sample(cpuTime: 0, uptime: 3600, name: "appstoreagent")
+        )
+        #expect(anomaly?.kind == .sustainedCPU)
+        #expect(anomaly?.identity.executableName == "appstoreagent")
+    }
+
+    @Test("does not flag a process whose typical CPU is below the chronic floor")
+    func ignoresNormalLoad() {
+        let robust = RobustStats(median: 12, mad: 3, count: 40)
+        #expect(DetectionRules.chronicCPUAnomaly(robust: robust, sample: sample(cpuTime: 0, uptime: 3600)) == nil)
+    }
+
+    @Test("never fires on a cold process with no robust stats yet")
+    func ignoresColdProcess() {
+        #expect(DetectionRules.chronicCPUAnomaly(robust: nil, sample: sample(cpuTime: 0, uptime: 3600)) == nil)
+    }
+}

@@ -87,7 +87,10 @@ public struct CorpusFeedKeys: Sendable {
     }
 
     /// PINNED PRODUCTION KEYS — fill from `php artisan feed:keygen` output.
-    public static let pinned = CorpusFeedKeys(keys: [:])
+    /// key_id 695521b4eac89fb2 minted on prod 2026-07-07 (api.anomalous.bot).
+    public static let pinned = CorpusFeedKeys(keys: [
+        "695521b4eac89fb2": "yBi4CNa6CyZK4KA9D0QxbvEx6xkZ1ErE0tEiBWBNHZA=",
+    ])
 }
 
 /// The last VERIFIED corpus, persisted to Application Support so cards stay

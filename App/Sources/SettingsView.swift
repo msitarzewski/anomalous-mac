@@ -4,6 +4,13 @@ import AppKit
 import CryptoKit
 import AnomalousCore
 
+/// Public help & documentation lives on the marketing site (anomalous.bot),
+/// independent of the dev/prod API server switch — so in-app "Learn more" links
+/// always resolve for end users. Module-internal: any view can deep-link in.
+func anomalousHelpURL(_ path: String = "/help") -> URL {
+    URL(string: "https://anomalous.bot" + path) ?? URL(string: "https://anomalous.bot")!
+}
+
 /// Standard Settings scene (⌘,) — the HIG home for a menu-bar app's
 /// configuration. Login item via ServiceManagement (framework, not HIG).
 struct SettingsView: View {
@@ -43,6 +50,8 @@ struct SettingsView: View {
                 Section {
                     Text("Detection is always free and runs entirely on your Mac. **Premium** adds expert help for the rare process the on-device model can't figure out on its own.")
                         .font(.callout)
+                    Link("Accounts, tokens & Get Help", destination: anomalousHelpURL("/help/account"))
+                        .font(.footnote)
                 }
                 premiumSection
                 createAccountSection
@@ -177,10 +186,14 @@ struct SettingsView: View {
                 helperRow
                 Text("Without the helper, Anomalous sees only your own apps. The helper (running with your approval) lets it also watch system daemons like dasd and WindowServer — where the worst runaways hide. It only reads process CPU/memory and can stop a runaway; nothing else.")
                     .font(.footnote).foregroundStyle(.secondary)
+                Link("Learn about the helper", destination: anomalousHelpURL("/help/helper"))
+                    .font(.footnote)
             }
 
             Section("Apple Intelligence") {
                 appleIntelligenceRow
+                Link("How the AI tiers work", destination: anomalousHelpURL("/help/ai-tiers"))
+                    .font(.footnote)
             }
 
             Section("Notifications") {
@@ -190,6 +203,8 @@ struct SettingsView: View {
                 ))
                 Text("Quiet, passive notices when a journal-worthy anomaly clears — they never make a sound or break Focus. Off by default: silence is the point.")
                     .font(.footnote).foregroundStyle(.secondary)
+                Link("About notifications", destination: anomalousHelpURL("/help/notifications"))
+                    .font(.footnote)
             }
         }
         .formStyle(.grouped)
@@ -235,6 +250,8 @@ struct SettingsView: View {
 
             HStack(spacing: 14) {
                 Link("Website", destination: URL(string: "https://anomalous.bot")!)
+                Text("·").foregroundStyle(.tertiary)
+                Link("Help", destination: anomalousHelpURL("/help"))
                 Text("·").foregroundStyle(.tertiary)
                 Link("GitHub", destination: URL(string: "https://github.com/msitarzewski/anomalous-mac")!)
                 Text("·").foregroundStyle(.tertiary)
@@ -306,6 +323,8 @@ struct SettingsView: View {
                         Text(dimension.why).font(.footnote).foregroundStyle(.secondary)
                     }
                 }
+                Link("What each signal means, and why", destination: anomalousHelpURL("/help/signals"))
+                    .font(.footnote)
             }
 
             Section("Held back this check") {
@@ -345,6 +364,7 @@ struct SettingsView: View {
                     .font(.footnote).foregroundStyle(.secondary)
                 Link("Full network disclosure (NETWORK.md)",
                      destination: URL(string: "https://github.com/msitarzewski/anomalous-mac/blob/main/NETWORK.md")!)
+                Link("Privacy & what leaves your Mac", destination: anomalousHelpURL("/help/privacy"))
             }
 
             if showUnlock && !devUnlocked {

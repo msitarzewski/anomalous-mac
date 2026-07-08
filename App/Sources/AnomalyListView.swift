@@ -183,6 +183,9 @@ struct AnomalyListView: View {
                     Button("View Send Log") {
                         NSWorkspace.shared.activateFileViewerSelecting([appState.sendLogDirectory])
                     }
+                    Button("Help & Documentation") {
+                        NSWorkspace.shared.open(anomalousHelpURL("/help"))
+                    }
                     Divider()
                     Button("Quit Anomalous") {
                         NSApplication.shared.terminate(nil)
@@ -211,6 +214,7 @@ struct DiagnosisCardView: View {
     @State private var brewService: BrewService? = nil
     @State private var brewBusy = false
     @State private var confirmingBrew = false
+    @State private var confirmingForceQuit = false
     @State private var expanded = false
 
     var body: some View {
@@ -242,6 +246,18 @@ struct DiagnosisCardView: View {
         // isn't a button expands/collapses. Buttons capture their own taps.
         .onTapGesture { withAnimation(.snappy(duration: 0.28)) { expanded.toggle() } }
         .onHover { isHovering = $0 }
+        .confirmationDialog(
+            "Force quit “\(judged.anomaly.identity.executableName)”?",
+            isPresented: $confirmingForceQuit,
+            titleVisibility: .visible
+        ) {
+            Button("Force Quit", role: .destructive) {
+                if let appState { run(judged.action, appState, force: true) }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Force quit ends it immediately, with no chance to save — any unsaved work is lost. A system service will usually relaunch on its own; a graceful Quit is safer whenever it works.")
+        }
         .task {
             // For a Homebrew-installed process, look up its live service so
             // the card can offer the proper stop/restart remedy.
@@ -612,7 +628,9 @@ struct DiagnosisCardView: View {
             if confirming && action.isDestructive {
                 Button(action.verb, role: .destructive) { run(action, appState, force: false) }.controlSize(.regular)
                 if action == .terminate {
-                    Button("Force Quit", role: .destructive) { run(action, appState, force: true) }.controlSize(.regular)
+                    // Force Quit is SIGKILL — no chance to save. Gate it behind
+                    // its own explicit confirmation, above the graceful Quit.
+                    Button("Force Quit", role: .destructive) { confirmingForceQuit = true }.controlSize(.regular)
                 }
                 Button("Cancel") { confirming = false }.controlSize(.regular)
             } else {

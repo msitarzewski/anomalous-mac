@@ -1153,7 +1153,18 @@ final class AppState {
             baseline: judgment[.cpuPercent]?.stats.median,
             robust: judgment[.cpuPercent]?.stats,
             thresholds: thresholds
-        ) { found.append(a) }
+        ) {
+            found.append(a)
+        } else if let a = DetectionRules.chronicCPUAnomaly(
+            // Baseline-poisoning catch: a runaway that never spikes to 80% but
+            // whose robust median is itself pathological. Only when the live
+            // sustained rule didn't already fire, so we never double-flag CPU.
+            robust: judgment[.cpuPercent]?.stats,
+            sample: sample,
+            thresholds: thresholds
+        ) {
+            found.append(a)
+        }
         if let a = DetectionRules.footprintLeakAnomaly(history: hist, baseline: judgment[.memoryMB], thresholds: thresholds) { found.append(a) }
         if let a = DetectionRules.rssCeilingAnomaly(sample: sample, thresholds: thresholds) { found.append(a) }
         if let a = hungAnomaly(for: sample) { found.append(a) }

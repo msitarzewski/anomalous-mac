@@ -16,9 +16,8 @@ struct OnboardingView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("hasCompletedOnboarding") private var completed = false
 
-    /// Help pages on the marketing site. NOTE: these live under
-    /// anomalous.bot/help/* — the pages must exist before ship (tracked
-    /// separately). Deep-linked so each row points at its own explainer.
+    /// Help pages on the marketing site (anomalous.bot/help/*), deep-linked so
+    /// each row points at its own explainer.
     private static let help = "https://anomalous.bot/help"
 
     var body: some View {
@@ -66,7 +65,7 @@ struct OnboardingView: View {
             icon: "eye", tint: .blue,
             title: "System-wide monitoring",
             body: "Without it, Anomalous sees only your own apps. With one approval in System Settings — never a password — it also watches system daemons like dasd and WindowServer, where the worst runaways hide. It only reads CPU/memory and can stop a runaway; nothing else.",
-            help: nil
+            help: "\(Self.help)/helper"
         ) {
             AnyView(helperControl)
         }
@@ -77,7 +76,7 @@ struct OnboardingView: View {
             icon: "dot.radiowaves.up.forward", tint: .teal,
             title: "Contribute anonymous signatures",
             body: "Help the shared knowledge map get smarter. Only the shape of an anomaly is sent — never file paths, arguments, or anything that identifies you or your Mac. Every send is in your log, byte-for-byte.",
-            help: "\(Self.help)/anonymous-signatures"
+            help: "\(Self.help)/privacy"
         ) {
             AnyView(Toggle("", isOn: Binding(
                 get: { appState.contributionEnabled },
@@ -91,7 +90,7 @@ struct OnboardingView: View {
             icon: "magnifyingglass", tint: .indigo,
             title: "Look up unknown processes",
             body: "When Anomalous doesn't recognize a process, it sends just the name (no personal data, no paths) to look up what it is — Sourced by Anomalous — instead of showing a shrug. Every lookup is in your send log.",
-            help: "\(Self.help)/unknown-process-lookup"
+            help: "\(Self.help)/discovery"
         ) {
             AnyView(Toggle("", isOn: Binding(
                 get: { appState.discoveryEnabled },
