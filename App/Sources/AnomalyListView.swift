@@ -251,11 +251,11 @@ struct DiagnosisCardView: View {
     @State private var confirmingBrew = false
     @State private var confirmingForceQuit = false
     @State private var expanded = false
+    @State private var showingTierInfo = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             titleRow                    // process name (full width) · dismiss ×
-            badges                      // status · kind · re-alert pills (own row)
             anomalyHighlight            // the headline verdict ("is this normal?")
             groupedObservations        // one-line "also:" for a grouped insight
             discoveryRow                // "Sourced by Anomalous" / looking up / Look it up
@@ -308,14 +308,15 @@ struct DiagnosisCardView: View {
         }
     }
 
-    /// The card footer: the Get Help CTA on the left, and the disclosure +
-    /// per-card menu on the right. Keeps the busy middle of the card for the
-    /// diagnosis; everything you DO with the card lives on this one bottom row.
+    /// The card footer: the status/kind pills and (multi-card) Get Help CTA on
+    /// the left, the disclosure + per-card menu on the right. Consolidates the
+    /// metadata and controls onto one bottom row so the title area stays clean.
     private var footer: some View {
         HStack(spacing: 8) {
             if showGetHelp, !judged.isResolved, let appState {
                 GetHelpControl(judged: judged, appState: appState)
             }
+            badges                      // kind · re-alert pills, after Get Help
             Spacer(minLength: 8)
             detailsToggle
             if !judged.isResolved, appState != nil { cardMenu }
@@ -415,7 +416,8 @@ struct DiagnosisCardView: View {
     /// carrying the full name; only the dismiss × (or resolved badge) shares
     /// the row, pinned right so the title truncates before it.
     private var titleRow: some View {
-        HStack(alignment: .center, spacing: 8) {
+        HStack(alignment: .center, spacing: 7) {
+            tierIcon
             Text(judged.anomaly.identity.executableName)
                 .font(.headline)
                 .lineLimit(1)
@@ -423,6 +425,42 @@ struct DiagnosisCardView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .help(judged.anomaly.identity.executableName)
             trailingControl
+        }
+    }
+
+    /// The safety tier as an icon in front of the name — a glanceable status
+    /// light (green = safe to act, amber = caution, gray = explain-only). The
+    /// word + a plain description live in a tap-open popover, so the title row
+    /// stays clean. NOTE: this means "safe to ACT," not "nothing is wrong."
+    private var tierIcon: some View {
+        Button { showingTierInfo = true } label: {
+            Image(systemName: tierSymbol)
+                .imageScale(.large)
+                .foregroundStyle(tierTint)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showingTierInfo, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 6) {
+                Label(tierStatusWord, systemImage: tierSymbol)
+                    .font(.headline).foregroundStyle(tierTint)
+                Text(tierDescription)
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(14)
+            .frame(width: 260)
+        }
+        .help(tierStatusWord)
+        .accessibilityLabel("Status: \(tierRole)")
+    }
+
+    /// Plain-language description of what the safety tier means, for the popover.
+    private var tierDescription: String {
+        switch judged.card.actionSafetyTier {
+        case 1: return "Safe to act on — the offered action (Quit or Restart) is reversible, and the system brings the process back if it's needed."
+        case 2: return "Act with care — stopping this could interrupt work or a running service, so read the details first."
+        default: return "Explain only — there's no safe automatic action here. Anomalous tells you what's going on and leaves the decision to you."
         }
     }
 
@@ -459,7 +497,6 @@ struct DiagnosisCardView: View {
     /// its way back (icon + words, never color alone).
     private var badges: some View {
         HStack(spacing: 7) {
-            statusPill
             kindPill
             if let marker = judged.returnedWorse {
                 Label(marker, systemImage: "arrow.uturn.up.circle.fill")
@@ -467,7 +504,6 @@ struct DiagnosisCardView: View {
                     .foregroundStyle(.orange)
                     .accessibilityLabel("Re-alert: \(marker)")
             }
-            Spacer(minLength: 0)
         }
     }
 
@@ -478,19 +514,6 @@ struct DiagnosisCardView: View {
             .lineLimit(1)
             .padding(.horizontal, 7).padding(.vertical, 2)
             .background(.secondary.opacity(0.15), in: Capsule())
-    }
-
-    /// Spelled-out status: an icon (shape + color) plus the word in
-    /// high-contrast text (WCAG 1.4.1 — never color alone) in a neutral pill.
-    private var statusPill: some View {
-        HStack(spacing: 4) {
-            Image(systemName: tierSymbol).imageScale(.medium).foregroundStyle(tierTint)
-            Text(tierStatusWord).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-        }
-        .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(.secondary.opacity(0.12), in: Capsule())
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Status: \(tierRole)")
     }
 
     /// THE highlight: what's actually abnormal, in prominent primary type.

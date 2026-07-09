@@ -50,6 +50,23 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         center.setNotificationCategories([category])
     }
 
+    /// A short, plain-English label for the anomaly kind — for the notification
+    /// subtitle, so a non-technical reader sees "GPU running hot," not the raw
+    /// rule name "gpu.saturation."
+    private static func plainKind(_ kind: Anomaly.Kind) -> String {
+        switch kind {
+        case .sustainedCPU, .cpuTimeRatio: return "High CPU"
+        case .rssLeak, .memoryLeakFootprint: return "Memory climbing"
+        case .rssCeiling: return "Very high memory"
+        case .gpuSaturation: return "GPU running hot"
+        case .energyWakeups: return "Draining the battery"
+        case .diskThrash: return "Heavy disk activity"
+        case .networkThroughput: return "Heavy network use"
+        case .novelProcess: return "New, unrecognized process"
+        case .appHung: return "Not responding"
+        }
+    }
+
     func post(for judged: AppState.JudgedAnomaly, conditionKey: String) async {
         await requestAuthorizationIfNeeded()
 
@@ -60,8 +77,13 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         } else {
             content.title = "\(judged.anomaly.identity.executableName) is anomalous"
         }
-        content.subtitle = judged.anomaly.kind.rawValue.replacingOccurrences(of: "_", with: " ")
-        content.body = "\(judged.card.whatItIs)\n\(judged.card.suggestedAction)"
+        // Subtitle: a short, plain-English "what" (not the raw rule name), so
+        // the notification reads title → what → do rather than a dense wall.
+        content.subtitle = Self.plainKind(judged.anomaly.kind)
+        // Body: the one actionable line. The long identity paragraph
+        // (whatItIs) belongs in the app card, not a glanceable notification —
+        // it's what made this feel squished.
+        content.body = judged.card.suggestedAction
         // Surfaced == confirmed high-confidence (Phase 2 gate in AppState) —
         // the ONLY level that may break Focus. Everything else in the app is
         // quieter than this by design.
