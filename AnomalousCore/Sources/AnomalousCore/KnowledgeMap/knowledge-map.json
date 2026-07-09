@@ -4,10 +4,10 @@
     "displayName": "Duet Activity Scheduler",
     "whatItIs": "Apple's background-activity scheduler: decides when deferrable system work (App Store updates, backups, analytics uploads) should run based on power, thermal, and usage predictions.",
     "ownedBy": "Apple (system daemon, launchd-managed)",
-    "whenHotImplies": "Almost always a wedged scheduling loop, frequently thrashing over a stuck task it keeps trying to schedule (check appstoreagent). Sustained CPU or multi-GB RSS is never normal for a scheduler. On macOS 27 betas specifically, multi-GB RSS growth is a known BiomeAgent leak: BiomeAgent re-registers an Apple Intelligence task (com.apple.intelligenceplatform.IntelligencePlatformCore.ViewLive) in a loop, and dasd accumulates memory tracking it — reaching tens of GB.",
+    "whenHotImplies": "Almost always a scheduling loop that has got stuck, often on one task it keeps trying to line up (check appstoreagent too). Steady high CPU, or memory in the multi-GB range, is never normal for something whose only job is scheduling. On macOS 27 betas specifically, that multi-GB memory growth is a known BiomeAgent glitch: BiomeAgent keeps re-registering an Apple Intelligence task over and over, and dasd piles up memory keeping track of it — climbing into the tens of GB.",
     "safetyTier": 1,
-    "safeAction": "kill — launchd respawns it fresh within seconds, reclaiming the leaked memory immediately",
-    "worstCase": "A deferred background task (backup, update check) runs later than it otherwise would.",
+    "safeAction": "Quitting it is safe — macOS starts it back up fresh within seconds, which clears the built-up memory right away.",
+    "worstCase": "A background task like a backup or update check runs a little later than it otherwise would.",
     "causallyLinked": [
       "appstoreagent",
       "backupd",
@@ -19,10 +19,10 @@
     "displayName": "Biome Agent",
     "whatItIs": "Part of Biome, Apple's on-device stream store for behavioral and contextual signals that feed Siri Suggestions and Apple Intelligence. BiomeAgent registers and coordinates background tasks that process these signals.",
     "ownedBy": "Apple (per-user agent, launchd-managed)",
-    "whenHotImplies": "On macOS 27 betas, a known defect makes BiomeAgent re-register the same Apple Intelligence task (com.apple.intelligenceplatform.IntelligencePlatformCore.ViewLive) in a loop; the visible symptom is usually dasd's memory ballooning to tens of GB rather than BiomeAgent itself being hot. Reported to Apple as a beta bug.",
+    "whenHotImplies": "On macOS 27 betas, a known glitch makes BiomeAgent keep re-registering the same Apple Intelligence task over and over; what you usually see is dasd's memory ballooning into the tens of GB rather than BiomeAgent itself running hot. It's been reported to Apple as a beta bug.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns; killing dasd is what actually reclaims the leaked memory. If it recurs on a beta, the deeper (Siri/Apple-Intelligence-affecting) workaround is to disable BiomeAgent — reversible, and worth undoing once Apple fixes it.",
-    "worstCase": "Siri Suggestions and some Apple Intelligence context may briefly stop updating until it respawns.",
+    "safeAction": "Quitting it is safe — macOS starts it back up on its own; quitting dasd is what actually clears the built-up memory. If it keeps coming back on a beta, the deeper fix (which does affect Siri and Apple Intelligence) is to turn BiomeAgent off — that's reversible, and worth turning back on once Apple fixes it.",
+    "worstCase": "Siri Suggestions and some Apple Intelligence context may briefly stop updating until it starts back up.",
     "causallyLinked": [
       "dasd"
     ]
@@ -35,7 +35,7 @@
     "whenHotImplies": "High CPU is almost always a CLIENT hammering the database, not mysqld itself: a busy-polling job queue (Laravel/Sidekiq workers with a near-zero sleep), an N+1 query storm, a missing index, or a runaway migration. A telling signature is thousands of individually sub-millisecond queries per second — each looks idle in SHOW PROCESSLIST, but the aggregate rate pins a core (death by a million paper cuts). Find the client; check SHOW FULL PROCESSLIST and your app's queue workers.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Do NOT kill it to quiet the CPU — you would drop every app's database connections and can lose in-flight writes, and the load returns the moment the client reconnects. Fix the client causing the load instead (e.g. a queue worker launched with --sleep=0).",
+    "worstCase": "Please don't quit it just to quiet the CPU — that would drop every app's database connections and can lose writes that are still in progress, and the load comes right back the moment the client reconnects. Fix the client causing the load instead (for example, a queue worker started with --sleep=0).",
     "causallyLinked": []
   },
   {
@@ -46,7 +46,7 @@
     "whenHotImplies": "As with mysqld: high CPU is almost always a client hammering it — busy-polling queue workers, N+1 queries, missing indexes, or a runaway query. The fix is on the client side.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Killing it drops all database connections and risks in-flight writes; the load returns when the client reconnects. Fix the client, not the server.",
+    "worstCase": "Quitting it drops all database connections and risks writes that are still in progress; the load returns when the client reconnects. Fix the client, not the server.",
     "causallyLinked": []
   },
   {
@@ -54,10 +54,10 @@
     "displayName": "PostgreSQL Database Server",
     "whatItIs": "A PostgreSQL backend process. Postgres runs one process per connection plus background workers (autovacuum, checkpointer, WAL writer), so several 'postgres' processes are normal.",
     "ownedBy": "The PostgreSQL database server. Ships via Homebrew, Postgres.app, a native package, or Docker; the runtime owner varies by install — Anomalous reads it live, per process.",
-    "whenHotImplies": "A hot backend usually means one expensive query or a client connection doing heavy work; a hot autovacuum worker means a large table is being vacuumed. Identify the query via pg_stat_activity rather than killing the process.",
+    "whenHotImplies": "A hot backend usually means one expensive query or a client connection doing heavy work; a hot autovacuum worker means a large table is being vacuumed. Identify the query via pg_stat_activity rather than quitting the process.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Killing a backend drops that client's transaction; killing the postmaster takes the whole database down. Diagnose the query instead.",
+    "worstCase": "Quitting a backend drops that client's transaction; quitting the main postgres process takes the whole database down. Diagnose the query instead.",
     "causallyLinked": []
   },
   {
@@ -68,7 +68,7 @@
     "whenHotImplies": "Sustained CPU means a client is issuing expensive commands (KEYS on a large keyspace, big sorts, hot Lua scripts) or an extremely high command rate. Growing memory can mean an unbounded key set with no eviction policy. Check the slow log and MONITOR briefly.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Killing it drops all cached data and any queue not persisted; apps relying on it will error until it restarts. Fix the client's command pattern.",
+    "worstCase": "Quitting it drops all cached data and any queue that isn't saved to disk; apps relying on it will error until it restarts. Fix the client's command pattern.",
     "causallyLinked": []
   },
   {
@@ -79,7 +79,7 @@
     "whenHotImplies": "High CPU usually means an unindexed query doing a collection scan, or a heavy aggregation pipeline. Check db.currentOp() and slow-query logs for the offending operation.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Killing it drops connections and risks in-flight writes. Diagnose the query, don't kill the server.",
+    "worstCase": "Quitting it drops connections and risks writes that are still in progress. Diagnose the query, don't stop the server.",
     "causallyLinked": []
   },
   {
@@ -87,9 +87,9 @@
     "displayName": "Ollama (local LLM server)",
     "whatItIs": "A local large-language-model server that runs open models on your machine.",
     "ownedBy": "You (a user-run service)",
-    "whenHotImplies": "High CPU/GPU and large memory are EXPECTED while a model is loaded and generating — this is the workload, not a runaway. It's only pathological if it stays pegged long after you stopped using it (a stuck request) or memory never releases between runs.",
+    "whenHotImplies": "High CPU/GPU and large memory are EXPECTED while a model is loaded and generating — that's the actual work, not a runaway. It's only a concern if it stays maxed out long after you've stopped using it (a stuck request), or memory never frees up between runs.",
     "safetyTier": 2,
-    "safeAction": "if it's stuck idle-but-hot, quitting Ollama is safe; it reloads the model on the next request",
+    "safeAction": "If it's sitting idle but still running hot, quitting Ollama is safe — it reloads the model on the next request.",
     "worstCase": "You interrupt an in-progress generation; nothing is lost beyond that request.",
     "causallyLinked": []
   },
@@ -109,9 +109,9 @@
     "displayName": "App Store Agent",
     "whatItIs": "Handles App Store background operations: update checks, downloads, receipt validation.",
     "ownedBy": "Apple (per-user agent, launchd-managed)",
-    "whenHotImplies": "A stuck background update or download retry loop. Frequently the task dasd is thrashing over when both are hot.",
+    "whenHotImplies": "A stuck background update, or a download that keeps retrying. Often it's the very task dasd is stuck repeating when both are running hot.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns on demand; interrupted downloads resume",
+    "safeAction": "Quitting it is safe — macOS starts it back up automatically, and any interrupted download picks back up.",
     "worstCase": "An app update arrives on the next check instead of now.",
     "causallyLinked": [
       "dasd"
@@ -122,7 +122,7 @@
     "displayName": "Spotlight Index Store",
     "whatItIs": "Spotlight's index-writing worker. Reads changed files and updates the search index.",
     "ownedBy": "Apple (system daemon)",
-    "whenHotImplies": "Heavy indexing after large file churn (build trees, mail imports, migrations) — often legitimate but long-running. Persistent heat with no file churn suggests a corrupt index.",
+    "whenHotImplies": "Heavy indexing after lots of files changed at once (big code checkouts, mail imports, migrations) — often perfectly normal, just long-running. Ongoing heat when nothing's changing on disk suggests the index is corrupt.",
     "safetyTier": 2,
     "safeAction": "usually wait; if persistent, rebuild the index for the hot volume (sudo mdutil -E)",
     "worstCase": "Interrupting mid-index restarts that volume's indexing from scratch.",
@@ -134,12 +134,12 @@
   {
     "processName": "kernel_task",
     "displayName": "Kernel Task (thermal proxy)",
-    "whatItIs": "The kernel itself. SPECIAL CASE: high kernel_task CPU is macOS deliberately occupying cores to force thermal throttling — it is the SYMPTOM, not the runaway.",
+    "whatItIs": "The kernel itself — the core of macOS. Important: high kernel_task CPU is macOS deliberately keeping the processor busy on purpose to cool the Mac down — it's the SYMPTOM of heat, not the cause.",
     "ownedBy": "Apple (the kernel — cannot and must not be killed)",
     "whenHotImplies": "Your Mac is hot. The correct diagnosis names WHO is heating it (look at the other anomalies in this window), plus airflow/charger-side factors.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Not applicable — unkillable by design.",
+    "worstCase": "Not applicable — this one can't be quit, by design.",
     "causallyLinked": []
   },
   {
@@ -149,7 +149,7 @@
     "ownedBy": "Apple (per-user agent)",
     "whenHotImplies": "Working through a large or newly imported photo library, usually on AC power overnight. Legitimate but can run hot for hours; runaway if it persists for days on an unchanged library.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns and resumes analysis later",
+    "safeAction": "Quitting it is safe — macOS starts it back up on its own and it picks the analysis up again later.",
     "worstCase": "Photos search/People albums update later.",
     "causallyLinked": [
       "photoanalysisd",
@@ -163,8 +163,8 @@
     "ownedBy": "Apple (system daemon)",
     "whenHotImplies": "A large backup in progress (first backup, big churn) — usually legitimate. Sustained heat with tiny backups suggests a snapshot or destination problem.",
     "safetyTier": 2,
-    "safeAction": "prefer stopping the backup from Time Machine settings over killing",
-    "worstCase": "Killing mid-backup can leave an incomplete snapshot to clean up (handled automatically, but the backup restarts).",
+    "safeAction": "Better to stop the backup from Time Machine settings rather than quitting it.",
+    "worstCase": "Quitting it mid-backup can leave an incomplete snapshot to clean up (macOS handles that automatically, but the backup starts over).",
     "causallyLinked": [
       "dasd"
     ]
@@ -176,8 +176,8 @@
     "ownedBy": "Apple (per-user agent)",
     "whenHotImplies": "Large sync in progress, or a sync conflict loop (same file re-uploading endlessly — check console for repeated items).",
     "safetyTier": 1,
-    "safeAction": "kill — respawns and resumes sync",
-    "worstCase": "Sync pauses briefly; no data loss (server is source of truth).",
+    "safeAction": "Quitting it is safe — macOS starts it back up on its own and it picks the sync back up.",
+    "worstCase": "Sync pauses for a moment; nothing is lost — the copy on the server is the master.",
     "causallyLinked": [
       "cloudd",
       "fileproviderd"
@@ -191,7 +191,7 @@
     "whenHotImplies": "Some app is forcing constant redraws (animating dashboards, broken transparency), or too many high-refresh displays. WindowServer heat is almost always ANOTHER app's fault.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Killing it logs out the entire session instantly, losing unsaved work everywhere.",
+    "worstCase": "Quitting it logs you out of the entire session instantly, losing unsaved work everywhere.",
     "causallyLinked": []
   },
   {
@@ -202,7 +202,7 @@
     "whenHotImplies": "Assessing a large newly-installed app bundle, or repeatedly re-assessing unsigned binaries (common with large dev trees).",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Security assessment is not something to kill; wait it out.",
+    "worstCase": "Security assessment isn't something to quit — best to wait it out.",
     "causallyLinked": [
       "trustd"
     ]
@@ -225,10 +225,10 @@
     "displayName": "Spotlight Metadata Server",
     "whatItIs": "The core of Spotlight. Coordinates indexing, spawns the mdworker processes, and answers search queries against the metadata index.",
     "ownedBy": "Apple (system daemon)",
-    "whenHotImplies": "Managing a large indexing job, or churning because a volume's index is corrupt and it keeps re-dispatching work. Its worker children (mdworker/mdworker_shared) usually show the actual CPU.",
+    "whenHotImplies": "Managing a big indexing job, or working in circles because a volume's index is corrupt and it keeps handing out the same work. Its helper processes (mdworker/mdworker_shared) usually show the actual CPU.",
     "safetyTier": 2,
-    "safeAction": "prefer mdutil over killing; if the index is corrupt, rebuild with sudo mdutil -E on the hot volume",
-    "worstCase": "Killing disrupts in-flight indexing and search briefly; it respawns.",
+    "safeAction": "Better to use mdutil rather than quitting it; if the index is corrupt, rebuild it with sudo mdutil -E on the affected volume.",
+    "worstCase": "Quitting it interrupts indexing and search for a moment; macOS starts it back up on its own.",
     "causallyLinked": [
       "mds_stores",
       "mdworker",
@@ -239,11 +239,11 @@
   {
     "processName": "mdworker_shared",
     "displayName": "Spotlight Import Worker (sandboxed)",
-    "whatItIs": "A short-lived Spotlight worker that opens changed files and runs the matching importer plugin to extract searchable text and metadata. Shared, sandboxed instances handle many file types.",
+    "whatItIs": "A short-lived Spotlight worker that opens changed files and runs the matching importer to pull out searchable text and details. Shared, sandboxed copies handle many file types.",
     "ownedBy": "Apple (system daemon, spawned by mds)",
-    "whenHotImplies": "Actively indexing new or changed files — usually a large import, download, or build tree. A single mdworker_shared pinned for a long time often means one pathological file its importer chokes on (a huge or malformed document).",
+    "whenHotImplies": "Actively indexing new or changed files — usually a big import, download, or code checkout. A single mdworker_shared stuck running for a long time often means one problem file its importer can't handle (a huge or malformed document).",
     "safetyTier": 1,
-    "safeAction": "kill — mds respawns workers on demand; that file is re-indexed later",
+    "safeAction": "Quitting it is safe — Spotlight starts its helpers back up as needed, and that file gets re-indexed later.",
     "worstCase": "One file's metadata is extracted a bit later; search stays otherwise intact.",
     "causallyLinked": [
       "mds",
@@ -256,9 +256,9 @@
     "displayName": "Spotlight Import Worker",
     "whatItIs": "The Spotlight worker process that extracts metadata and text from files for the search index. The non-shared form runs importers that need their own process.",
     "ownedBy": "Apple (system daemon, spawned by mds)",
-    "whenHotImplies": "Same as its shared sibling: heavy file churn being indexed, or a single file whose importer is stuck. Many mdworkers at once is normal during a big import.",
+    "whenHotImplies": "Same as its shared sibling: lots of changed files being indexed, or a single file whose importer is stuck. Many mdworkers at once is normal during a big import.",
     "safetyTier": 1,
-    "safeAction": "kill — mds respawns it; the file is re-indexed later",
+    "safeAction": "Quitting it is safe — Spotlight starts it back up, and the file gets re-indexed later.",
     "worstCase": "One file's metadata lands in the index slightly later.",
     "causallyLinked": [
       "mds",
@@ -271,9 +271,9 @@
     "displayName": "Core Spotlight Daemon",
     "whatItIs": "Indexes content that apps donate to Spotlight through the Core Spotlight API — Mail messages, Messages, Notes, and third-party app items — as opposed to files on disk.",
     "ownedBy": "Apple (system daemon)",
-    "whenHotImplies": "An app is donating or reindexing a large batch of items (a big Mail account resync, a Notes migration). Persistent heat can mean a reindex loop over an app's data store.",
+    "whenHotImplies": "An app is handing over or re-indexing a big batch of items (a large Mail account resync, a Notes migration). Ongoing heat can mean it's stuck re-indexing the same app's data over and over.",
     "safetyTier": 2,
-    "safeAction": "usually wait; it recovers once the donating app finishes or after an index rebuild",
+    "safeAction": "Usually best to wait; it settles once the app finishes, or after an index rebuild.",
     "worstCase": "In-app Spotlight results (Mail, Notes) update later; on-disk file search is unaffected.",
     "causallyLinked": [
       "mds",
@@ -285,10 +285,10 @@
     "displayName": "File System Events Daemon",
     "whatItIs": "Records a log of directory changes so services like Spotlight and Time Machine can learn what changed without rescanning the whole disk.",
     "ownedBy": "Apple (system daemon)",
-    "whenHotImplies": "A flood of filesystem changes — a giant build, a bulk copy, or a runaway process writing endlessly. fseventsd is rarely the culprit; it is reflecting whoever is churning the disk.",
+    "whenHotImplies": "A flood of filesystem changes — a giant build, a bulk copy, or a runaway process writing endlessly. fseventsd is rarely the culprit; it's just reflecting whatever is hammering the disk.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "System-critical for change tracking; killing it can make Spotlight and Time Machine miss changes and force full rescans.",
+    "worstCase": "System-critical for change tracking; quitting it can make Spotlight and Time Machine miss changes and force full rescans.",
     "causallyLinked": [
       "mds",
       "backupd"
@@ -301,7 +301,7 @@
     "ownedBy": "Apple (per-user agent)",
     "whenHotImplies": "Working through a large or freshly imported library, typically when idle and on power. Normal for hours after a big import; suspicious if it runs for days on an unchanged library.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns and resumes analysis later, usually overnight on power",
+    "safeAction": "Quitting it is safe — macOS starts it back up on its own and picks the analysis up again later, usually overnight while plugged in.",
     "worstCase": "People albums, Memories, and photo search update later.",
     "causallyLinked": [
       "mediaanalysisd",
@@ -315,7 +315,7 @@
     "ownedBy": "Apple (per-user agent)",
     "whenHotImplies": "A large import, edit, or iCloud Photos sync in progress. Sustained heat with no library activity can indicate a database that needs repair.",
     "safetyTier": 2,
-    "safeAction": "quit Photos and let it settle rather than killing; the library database is best not interrupted mid-write",
+    "safeAction": "Quit Photos and let it settle rather than force-quitting this — the library is best not interrupted while it's writing.",
     "worstCase": "Interrupting a library write can require Photos to repair the library on next launch.",
     "causallyLinked": [
       "photoanalysisd",
@@ -331,7 +331,7 @@
     "whenHotImplies": "Almost always an app hammering the audio stack (a stuck stream, a plug-in in a tight loop, constant sample-rate switching) rather than coreaudiod itself. Look for the audio app that is actually busy.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "System audio infrastructure; killing cuts all audio and can wedge apps holding audio sessions.",
+    "worstCase": "System audio infrastructure; quitting it cuts all audio and can jam up apps that are holding an audio session.",
     "causallyLinked": []
   },
   {
@@ -339,9 +339,9 @@
     "displayName": "CloudKit Daemon",
     "whatItIs": "Syncs CloudKit data for iCloud and for apps that store data in iCloud — the transport behind iCloud-backed app databases.",
     "ownedBy": "Apple (per-user agent)",
-    "whenHotImplies": "A large CloudKit sync, or a push-driven retry storm when an app's container keeps failing to reconcile. Often hot alongside the app whose data it is syncing.",
+    "whenHotImplies": "A large iCloud sync, or a burst of retries when an app's iCloud data keeps failing to line up. Often runs hot alongside the app whose data it's syncing.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns and resumes sync; the server holds the authoritative copy",
+    "safeAction": "Quitting it is safe — macOS starts it back up on its own and it picks the sync back up; your data lives on the server, so nothing is lost.",
     "worstCase": "iCloud-backed app data syncs a little later; no local data loss.",
     "causallyLinked": [
       "bird",
@@ -354,10 +354,10 @@
     "displayName": "File Provider Daemon",
     "whatItIs": "Coordinates File Provider extensions — the on-demand file system behind iCloud Drive and third-party clients like Dropbox, OneDrive, and Google Drive.",
     "ownedBy": "Apple (per-user agent)",
-    "whenHotImplies": "Materializing or evicting many files, or a third-party provider extension misbehaving in a sync loop. Check which provider (which cloud app) is active.",
+    "whenHotImplies": "Downloading or clearing out many files, or a third-party cloud extension misbehaving in a sync loop. Check which cloud app is active.",
     "safetyTier": 2,
-    "safeAction": "prefer pausing the offending cloud client; killing can interrupt in-flight file materialization",
-    "worstCase": "A file being downloaded on demand has to restart; providers generally recover.",
+    "safeAction": "Better to pause the cloud app that's acting up — quitting this can interrupt a file that's mid-download.",
+    "worstCase": "A file that was downloading on demand has to start over; the cloud apps generally recover.",
     "causallyLinked": [
       "bird",
       "cloudd"
@@ -370,7 +370,7 @@
     "ownedBy": "Apple (per-user agent)",
     "whenHotImplies": "A large background transfer, or a client that keeps re-queuing a failing download. The heat is bandwidth and retry work for whichever service owns the transfer.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns; background transfers resume from where they left off",
+    "safeAction": "Quitting it is safe — macOS starts it back up, and background transfers pick up from where they left off.",
     "worstCase": "An in-progress download or upload pauses briefly, then resumes.",
     "causallyLinked": [
       "cloudd",
@@ -384,7 +384,7 @@
     "ownedBy": "Apple (per-user agent)",
     "whenHotImplies": "A big mailbox resync, or a sync loop against a server that keeps returning errors (a classic: one item the server and Mac disagree on). Persistent heat usually points at one bad account.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns and resumes; the mail server holds the authoritative copy",
+    "safeAction": "Quitting it is safe — macOS starts it back up and it picks up where it left off; your mail lives on the server, so nothing is lost.",
     "worstCase": "Mail/Contacts/Calendar sync pauses briefly for that account.",
     "causallyLinked": [
       "CalendarAgent",
@@ -396,9 +396,9 @@
     "displayName": "Calendar Agent",
     "whatItIs": "Syncs calendars and manages calendar accounts (iCloud and CalDAV), fetching and pushing events in the background.",
     "ownedBy": "Apple (per-user agent)",
-    "whenHotImplies": "A large calendar resync, or a repeating-event/invitation loop where one malformed event keeps failing to reconcile with the server.",
+    "whenHotImplies": "A large calendar resync, or a loop over a repeating event or invitation where one broken event keeps failing to sync with the server.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns and resumes; the server holds the authoritative copy",
+    "safeAction": "Quitting it is safe — it restarts and picks up where it left off; your calendar lives on the server, so nothing is lost.",
     "worstCase": "Calendar changes sync a little later.",
     "causallyLinked": [
       "dataaccessd",
@@ -413,7 +413,7 @@
     "ownedBy": "Apple (per-user agent)",
     "whenHotImplies": "Active Maps use downloading tiles and routes. Idle heat is unusual and can mean a cache or download it keeps retrying.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns; Maps reloads data as needed",
+    "safeAction": "Quitting it is safe — macOS starts it back up, and Maps reloads whatever it needs.",
     "worstCase": "Maps briefly re-fetches tiles or route data.",
     "causallyLinked": [
       "nsurlsessiond"
@@ -426,7 +426,7 @@
     "ownedBy": "Apple (system daemon)",
     "whenHotImplies": "Fetching a batch of assets after a login or OS update, or retrying a download that keeps failing. Often paired with a background download service.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns and resumes; asset downloads retry later",
+    "safeAction": "Quitting it is safe — macOS starts it back up and it picks up where it left off; the downloads retry later.",
     "worstCase": "An optional asset (a voice, a dictionary) arrives later.",
     "causallyLinked": [
       "nsurlsessiond",
@@ -440,7 +440,7 @@
     "ownedBy": "Apple (per-user agent)",
     "whenHotImplies": "Processing a burst of new content (a big Mail import, lots of new messages) to update suggestions. Sustained heat can mean it is chewing on a large or problematic data set.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns and resumes learning later",
+    "safeAction": "Quitting it is safe — macOS starts it back up and it picks the learning up again later.",
     "worstCase": "Siri Suggestions refresh a bit later.",
     "causallyLinked": [
       "knowledgeconstructiond",
@@ -452,9 +452,9 @@
     "displayName": "Knowledge Construction Daemon",
     "whatItIs": "Builds the on-device knowledge graph from your data — linking people, places, and events mined from Mail, Messages, and Contacts to feed Siri and Spotlight suggestions.",
     "ownedBy": "Apple (per-user agent)",
-    "whenHotImplies": "Ingesting a large batch of new personal data (a fresh Mail/Messages sync) to rebuild the graph. Usually settles once caught up; long heat can mean it keeps reprocessing the same data.",
+    "whenHotImplies": "Taking in a big batch of new personal data (a fresh Mail or Messages sync) to rebuild the graph. Usually settles once it's caught up; long-lasting heat can mean it keeps reprocessing the same data.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns and resumes; the graph rebuilds incrementally",
+    "safeAction": "Quitting it is safe — macOS starts it back up and it picks up where it left off; the graph rebuilds a bit at a time.",
     "worstCase": "Suggestions and Spotlight relevance update later.",
     "causallyLinked": [
       "suggestd",
@@ -466,9 +466,9 @@
     "displayName": "CoreDuet Daemon",
     "whatItIs": "Collects and models usage patterns — app launches, activity, and context — to drive app predictions, Handoff, and proactive suggestions, and to inform the activity scheduler.",
     "ownedBy": "Apple (per-user agent)",
-    "whenHotImplies": "Processing accumulated activity data. Persistent heat can indicate a bloated or wedged CoreDuet store it keeps re-scanning.",
+    "whenHotImplies": "Working through a backlog of activity data. Ongoing heat can mean its data store has grown bloated or got stuck, and it keeps re-scanning it.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns and resumes; predictions rebuild over time",
+    "safeAction": "Quitting it is safe — macOS starts it back up and it picks up where it left off; predictions rebuild over time.",
     "worstCase": "App predictions and proactive suggestions are briefly less accurate.",
     "causallyLinked": [
       "suggestd",
@@ -481,9 +481,9 @@
     "displayName": "Biome Sync Daemon",
     "whatItIs": "Part of Biome, Apple's on-device stream of user-activity events used by Siri and proactive features. biomesyncd syncs that data across your signed-in devices.",
     "ownedBy": "Apple (per-user agent)",
-    "whenHotImplies": "Reconciling a backlog of activity events across devices, or a sync loop when the Biome store on one device is out of step. A known intermittent CPU offender after setup or restore.",
+    "whenHotImplies": "Catching up a backlog of activity events across your devices, or a sync loop when one device's Biome data is out of step. A known occasional CPU hog after setup or a restore.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns and resumes sync",
+    "safeAction": "Quitting it is safe — macOS starts it back up and it picks the sync back up.",
     "worstCase": "Cross-device activity data syncs later; no user-visible data loss.",
     "causallyLinked": [
       "coreduetd",
@@ -496,9 +496,9 @@
     "displayName": "Sharing Daemon",
     "whatItIs": "Runs Continuity sharing features — AirDrop, Handoff, Universal Clipboard, Instant Hotspot, and shared-media discovery.",
     "ownedBy": "Apple (per-user agent)",
-    "whenHotImplies": "Active discovery over Wi-Fi/Bluetooth (an AirDrop window open, nearby devices advertising), or a discovery loop when Bluetooth/Wi-Fi state keeps flapping.",
+    "whenHotImplies": "Actively looking for nearby devices over Wi-Fi and Bluetooth (an AirDrop window open, nearby devices announcing themselves), or a loop when Bluetooth or Wi-Fi keeps flipping on and off.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns; sharing features re-advertise",
+    "safeAction": "Quitting it is safe — macOS starts it back up, and the sharing features come right back.",
     "worstCase": "AirDrop/Handoff drop for a moment, then recover.",
     "causallyLinked": [
       "rapportd",
@@ -510,9 +510,9 @@
     "displayName": "Rapport Daemon",
     "whatItIs": "Enables Continuity connectivity between your Apple devices — the BLE/Wi-Fi link behind Handoff, iPhone Cellular Calls, Instant Hotspot, and Sidecar.",
     "ownedBy": "Apple (per-user agent)",
-    "whenHotImplies": "Constant discovery/advertising to nearby devices. Sustained heat often tracks Bluetooth or Wi-Fi churn, or a nearby device repeatedly connecting and dropping.",
+    "whenHotImplies": "Constantly looking for and announcing itself to nearby devices. Steady heat often tracks Bluetooth or Wi-Fi acting up, or a nearby device that keeps connecting and dropping.",
     "safetyTier": 1,
-    "safeAction": "kill — respawns and re-establishes Continuity links",
+    "safeAction": "Quitting it is safe — macOS starts it back up and reconnects the Continuity links.",
     "worstCase": "Handoff and cross-device calling blink out briefly.",
     "causallyLinked": [
       "sharingd",
@@ -524,9 +524,9 @@
     "displayName": "Identity Services Daemon (IDS)",
     "whatItIs": "Manages Apple's identity layer for iMessage, FaceTime, and Continuity — device registration and the encryption keys those services use.",
     "ownedBy": "Apple (per-user agent)",
-    "whenHotImplies": "Re-registering identities or reconciling accounts, often after a sign-in change or network flap. Chronic heat can mean an account stuck retrying registration.",
+    "whenHotImplies": "Re-registering identities or sorting out accounts, often after a sign-in change or a network hiccup. Long-lasting heat can mean an account is stuck retrying its registration.",
     "safetyTier": 2,
-    "safeAction": "prefer signing the affected account out/in; killing disrupts Messages/FaceTime session state",
+    "safeAction": "Better to sign the affected account out and back in — quitting this disrupts Messages and FaceTime while they're mid-session.",
     "worstCase": "iMessage and FaceTime briefly lose registration and re-establish it.",
     "causallyLinked": [
       "imagent",
@@ -541,7 +541,7 @@
     "ownedBy": "Apple (per-user agent)",
     "whenHotImplies": "Processing a large Messages backlog or attachment sync, or a send/receive retry loop against a struggling account.",
     "safetyTier": 2,
-    "safeAction": "prefer quitting Messages; killing imagent drops in-flight sends and connection state",
+    "safeAction": "Better to quit Messages itself — quitting imagent drops any message that's mid-send along with the connection.",
     "worstCase": "A message in the middle of sending may need resending; history is safe.",
     "causallyLinked": [
       "identityservicesd",
@@ -555,7 +555,7 @@
     "ownedBy": "Apple (per-user agent)",
     "whenHotImplies": "Managing an active or ringing call, or a relay loop when the paired iPhone connection is unstable. Idle heat is unusual.",
     "safetyTier": 2,
-    "safeAction": "prefer ending the call normally; killing can drop an in-progress call",
+    "safeAction": "Better to end the call normally — quitting this can drop a call that's in progress.",
     "worstCase": "An active FaceTime or relayed phone call is dropped.",
     "causallyLinked": [
       "avconferenced",
@@ -567,9 +567,9 @@
     "displayName": "AV Conference Daemon",
     "whatItIs": "The FaceTime audio/video engine — captures, encodes, and streams the media for FaceTime calls.",
     "ownedBy": "Apple (per-user agent)",
-    "whenHotImplies": "An active FaceTime call — high CPU here is expected during a call. Heat with no call running is the anomaly and suggests a call that failed to tear down.",
+    "whenHotImplies": "An active FaceTime call — high CPU here is expected during a call. Heat with no call running is the odd part, and suggests a call that didn't fully end.",
     "safetyTier": 2,
-    "safeAction": "prefer ending the FaceTime call; killing drops the call immediately",
+    "safeAction": "Better to end the FaceTime call itself — quitting this drops the call right away.",
     "worstCase": "The active FaceTime call ends abruptly.",
     "causallyLinked": [
       "callservicesd"
@@ -582,7 +582,7 @@
     "ownedBy": "Apple (system daemon, scheduled)",
     "whenHotImplies": "A scheduled malware scan in progress — legitimate and periodic, and can briefly use real CPU and disk. Suspicious only if it runs continuously rather than in short bursts.",
     "safetyTier": 2,
-    "safeAction": "prefer letting the scan finish; it is harmless and reschedules if killed, but it is doing real security work",
+    "safeAction": "Better to let the scan finish — it's harmless and will simply run again if you quit it, but it's doing real security work.",
     "worstCase": "A malware scan is skipped and simply runs again on the next schedule.",
     "causallyLinked": [
       "dasd"
@@ -595,7 +595,7 @@
     "ownedBy": "Apple (system daemon)",
     "whenHotImplies": "An update check, download, or 'preparing' phase underway. Sustained heat can mean a download that keeps restarting or an update stuck preparing.",
     "safetyTier": 2,
-    "safeAction": "prefer managing it from System Settings > General > Software Update; killing interrupts the download/prepare, which resumes",
+    "safeAction": "Better to manage it from System Settings > General > Software Update — quitting this interrupts the download or prep, though it does resume.",
     "worstCase": "An in-progress update download or preparation restarts.",
     "causallyLinked": [
       "dasd",
@@ -610,7 +610,7 @@
     "whenHotImplies": "A burst of permission checks, often an app repeatedly probing an access it lacks. tccd is enforcing, not the runaway — find the app triggering the checks.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Privacy-critical; killing it can break permission prompts and leave apps unable to gain or verify access.",
+    "worstCase": "Privacy-critical; quitting it can break permission prompts and leave apps unable to get or check access.",
     "causallyLinked": []
   },
   {
@@ -621,7 +621,7 @@
     "whenHotImplies": "A wave of first-time code-signature validations — launching many new binaries at once, or a large unsigned/ad-hoc-signed dev tree. It is verifying whoever is launching, not looping on its own.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Security-critical; killing it can block app launches and destabilize the system.",
+    "worstCase": "Security-critical; quitting it can block apps from launching and destabilize the system.",
     "causallyLinked": [
       "syspolicyd"
     ]
@@ -634,7 +634,7 @@
     "whenHotImplies": "An install or update actively unpacking and writing files. Sustained heat can mean an install stuck retrying or working through a very large package.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Killing mid-install can leave a partially installed app that must be reinstalled — do not interrupt.",
+    "worstCase": "Quitting it mid-install can leave a half-installed app that has to be reinstalled — best not to interrupt it.",
     "causallyLinked": [
       "appstoreagent",
       "syspolicyd"
@@ -645,10 +645,10 @@
     "displayName": "Power Management Daemon",
     "whatItIs": "Manages sleep, wake, display dimming, and power assertions — the arbiter of when the Mac may idle-sleep.",
     "ownedBy": "Apple (system daemon)",
-    "whenHotImplies": "Rarely hot itself; when it is, some component is thrashing power assertions (repeatedly preventing and allowing sleep). The fix is the assertion holder, not powerd.",
+    "whenHotImplies": "Rarely hot itself; when it is, some component is rapidly toggling power requests (over and over preventing and then allowing sleep). The fix is whatever is holding those requests, not powerd.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "System-critical; killing it disrupts sleep/wake and power management.",
+    "worstCase": "System-critical; quitting it disrupts sleep, wake, and power management.",
     "causallyLinked": []
   },
   {
@@ -659,7 +659,7 @@
     "whenHotImplies": "Elevated activity can mean it is tracking a process that is hanging or missing its checkpoints. It is the watcher, not the runaway.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "System-critical; never kill — it guards system responsiveness.",
+    "worstCase": "System-critical; never quit it — it's what keeps the system responsive.",
     "causallyLinked": []
   },
   {
@@ -667,32 +667,32 @@
     "displayName": "Disk Arbitration Daemon",
     "whatItIs": "Coordinates mounting and unmounting of disks and volumes, and notifies apps when storage appears or disappears.",
     "ownedBy": "Apple (system daemon)",
-    "whenHotImplies": "A storm of mount/unmount events — a flaky external drive reconnecting, or disk images repeatedly attaching. It is reacting to the churn, not causing it.",
+    "whenHotImplies": "A rapid series of mount/unmount events — a flaky external drive reconnecting, or disk images attaching over and over. It's reacting to all that activity, not causing it.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "System-critical for volume management; killing it can wedge mounting and eject handling.",
+    "worstCase": "System-critical for volume management; quitting it can jam up mounting and ejecting drives.",
     "causallyLinked": []
   },
   {
     "processName": "notifyd",
     "displayName": "Notification Server (notify)",
-    "whatItIs": "The lightweight system notification hub — delivers named state-change signals between processes via the notify(3) API. Used constantly by the whole system.",
+    "whatItIs": "The lightweight system notification hub — passes small 'something changed' signals between processes. Used constantly by the whole system.",
     "ownedBy": "Apple (system daemon)",
     "whenHotImplies": "A process posting or observing notifications in a tight loop, flooding the hub. The heat is a chatty client; notifyd is just the switchboard.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Extremely central; killing it destabilizes many processes that rely on notifications.",
+    "worstCase": "Extremely central; quitting it destabilizes the many processes that rely on these notifications.",
     "causallyLinked": []
   },
   {
     "processName": "cfprefsd",
     "displayName": "Preferences Daemon",
-    "whatItIs": "Reads and writes preferences (.plist / NSUserDefaults) on behalf of apps and the system, serializing access to each preference domain.",
+    "whatItIs": "Reads and writes app and system preferences (settings files), handling one request at a time for each app's settings.",
     "ownedBy": "Apple (per-user and system daemon)",
-    "whenHotImplies": "An app hammering its preferences — writing defaults in a loop. cfprefsd is doing the I/O for a misbehaving client; identify the app churning its settings.",
+    "whenHotImplies": "An app hammering its preferences — saving settings over and over in a loop. cfprefsd is just doing the reading and writing for a misbehaving app; find the app that keeps changing its settings.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Killing it during a write risks losing or corrupting preferences for apps writing at that moment.",
+    "worstCase": "Quitting it during a write risks losing or corrupting the settings for any app saving at that moment.",
     "causallyLinked": []
   },
   {
@@ -703,18 +703,18 @@
     "whenHotImplies": "A flood of identity lookups or auth attempts, or slow/failing queries against a bound network directory. On networked Macs, a slow directory server is a common cause.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Security- and login-critical; killing it can break authentication and account lookups.",
+    "worstCase": "Security- and login-critical; quitting it can break sign-in and account lookups.",
     "causallyLinked": []
   },
   {
     "processName": "hidd",
     "displayName": "HID (Input) Daemon",
-    "whatItIs": "The Human Interface Device daemon — processes input events from keyboards, mice, trackpads, and other HID devices.",
+    "whatItIs": "The input handler — processes what comes from keyboards, mice, trackpads, and other input devices.",
     "ownedBy": "Apple (system daemon)",
-    "whenHotImplies": "A device generating a storm of events — a stuck key, a jittery mouse or trackpad, or a misbehaving HID peripheral. The device is the cause, not hidd.",
+    "whenHotImplies": "A device sending a flood of input — a stuck key, a jittery mouse or trackpad, or a misbehaving accessory. The device is the cause, not hidd.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Input-critical; killing it can leave the Mac unresponsive to keyboard and pointer.",
+    "worstCase": "Input-critical; quitting it can leave the Mac unresponsive to the keyboard and pointer.",
     "causallyLinked": []
   },
   {
@@ -725,7 +725,7 @@
     "whenHotImplies": "Some process is logging at a furious rate, flooding the log stream. logd's heat is the volume of a chatty component — hunt the process spamming the log.",
     "safetyTier": 3,
     "safeAction": null,
-    "worstCase": "Killing it disrupts logging continuity for the whole system; it respawns, but log history around the gap is lost.",
+    "worstCase": "Quitting it disrupts logging for the whole system; it comes right back, but the log history around the gap is lost.",
     "causallyLinked": []
   },
   {
@@ -735,7 +735,7 @@
     "ownedBy": "Apple (per-user agent)",
     "whenHotImplies": "Rebuilding app registrations after installs or an OS update, or a loop re-registering a malformed app bundle. Often hot right after large app changes.",
     "safetyTier": 2,
-    "safeAction": "usually wait; killing respawns it but disrupts app-launch and icon lookups briefly",
+    "safeAction": "Usually best to wait; quitting it does bring it right back, but app launching and icon lookups hiccup for a moment.",
     "worstCase": "File/URL associations and app launching hiccup while it rebuilds.",
     "causallyLinked": [
       "syspolicyd"
@@ -746,10 +746,10 @@
     "displayName": "AuthKit Daemon",
     "whatItIs": "Manages Apple ID authentication and account state — the tokens and sign-in status that iCloud and Apple services depend on.",
     "ownedBy": "Apple (per-user agent)",
-    "whenHotImplies": "Re-authenticating or reconciling Apple ID state, often after a password change or network flap. Chronic heat can mean an auth retry loop.",
+    "whenHotImplies": "Re-signing in or sorting out your Apple ID, often after a password change or a network hiccup. Long-lasting heat can mean it's stuck retrying the sign-in.",
     "safetyTier": 2,
-    "safeAction": "prefer resolving the Apple ID sign-in in System Settings; killing disrupts in-flight authentication",
-    "worstCase": "Apple ID-backed services briefly lose authentication and re-establish it.",
+    "safeAction": "Better to sort the Apple ID sign-in in System Settings — stopping it now can interrupt a sign-in already in progress.",
+    "worstCase": "Apple ID-backed services briefly lose their sign-in, then re-establish it.",
     "causallyLinked": [
       "apsd",
       "cloudd",
@@ -763,7 +763,7 @@
     "ownedBy": "Apple (system daemon)",
     "whenHotImplies": "A reconnect loop on a flaky network, or a flood of incoming pushes. Sustained heat often tracks network instability rather than apsd itself.",
     "safetyTier": 2,
-    "safeAction": "prefer waiting or toggling the network; killing drops the push connection, delaying notifications until it reconnects",
+    "safeAction": "Better to wait, or toggle your network — stopping it drops the notifications connection until it reconnects.",
     "worstCase": "Push notifications (Messages, Mail, iCloud) are delayed briefly while the connection re-establishes.",
     "causallyLinked": [
       "identityservicesd",
@@ -778,7 +778,7 @@
     "ownedBy": "Apple (system daemon, spawned on demand)",
     "whenHotImplies": "Something is crashing repeatedly — ReportCrash spikes each time it writes a report. Constant activity means an app is crash-looping; the fix is that app, not ReportCrash.",
     "safetyTier": 1,
-    "safeAction": "kill — harmless; it is invoked again on the next crash",
+    "safeAction": "Quitting it is harmless — macOS runs it again the next time it's needed.",
     "worstCase": "One crash report is not written; the crashing app is the real issue to address.",
     "causallyLinked": [
       "spindump"
@@ -791,7 +791,7 @@
     "ownedBy": "Apple (system daemon, spawned on demand)",
     "whenHotImplies": "The system is sampling a process that is hanging — spindump running means something else is stuck (a beachballing app). It is the diagnostician, not the culprit.",
     "safetyTier": 1,
-    "safeAction": "kill — harmless; it runs again the next time a process hangs",
+    "safeAction": "Quitting it is harmless — it runs again the next time something hangs.",
     "worstCase": "One hang report is skipped; the hanging app is the real target.",
     "causallyLinked": [
       "ReportCrash"

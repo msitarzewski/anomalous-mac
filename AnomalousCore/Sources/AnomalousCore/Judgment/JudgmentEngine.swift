@@ -143,7 +143,11 @@ public struct JudgmentEngine: Sendable {
     /// pulled wins) when a snapshot exists, else the shipped map.
     func groundingEntry(for anomaly: Anomaly, context: JudgmentContext?) -> KnowledgeEntry? {
         let name = anomaly.identity.executableName
-        return context?.corpusEntry(for: name) ?? knowledgeMap.entry(forProcessName: name)
+        // Exact by observed name (context snapshot first, then merged map), then
+        // the channel-aware fallback so a variant like dev.zed.Zed-Preview reuses
+        // the base app's record instead of falling through to a model guess.
+        return context?.corpusEntry(for: name)
+            ?? knowledgeMap.entry(for: anomaly.identity)
     }
 
     static let cardPrompt = "Fill the diagnosis card for this anomaly."
@@ -342,6 +346,10 @@ public struct JudgmentEngine: Sendable {
             "If a fact is not provided, say so plainly rather than guessing.",
             "Write in plain English. NEVER expose internal jargon to the user:",
             "no rule names (e.g. 'cputime_ratio'), no internal field names (e.g. 'whenHotImplies'), no window sizes in minutes, no 'threshold', no 'MADs'.",
+            // Brand voice: cards are read by non-technical people, not engineers.
+            "Voice — speak to a non-technical adult (a busy parent, not an engineer): warm, plain, calm, reassuring.",
+            "Say 'quit it' / 'stop it' / 'close it' — NEVER 'kill', 'terminate', 'SIGKILL'. Say 'macOS starts it back up on its own' or 'it comes right back' — NEVER 'respawn'. Say 'background helper' or the app's own name — avoid 'daemon'. Avoid 'in-flight', 'thrashing', 'launchd'.",
+            "Accuracy still wins: never soften a real risk to sound friendly — if quitting is genuinely safe say so plainly; if it's better to wait, say why in plain terms.",
             "For 'isThisNormal': ONE short, calm sentence — is this normal, and how far from normal.",
             "",
             "Process: '\(anomaly.identity.executableName)'",
@@ -357,8 +365,13 @@ public struct JudgmentEngine: Sendable {
         if !anomaly.alsoObserved.isEmpty {
             lines.append("- also observed: \(anomaly.alsoObserved.joined(separator: "; "))")
         }
-        if let bundleID = anomaly.identity.bundleID {
-            lines.append("Bundle: \(bundleID) version \(anomaly.identity.appVersion ?? "unknown")")
+        if anomaly.identity.bundleID != nil {
+            // Emit the CANONICAL id (channel suffix stripped) so a "-Preview"
+            // token never reaches the model as bait — see the bundle-anchored
+            // block below. The channel, if any, is stated as a plain fact.
+            let canonical = anomaly.identity.canonicalBundleID ?? anomaly.identity.bundleID!
+            let channelNote = anomaly.identity.releaseChannel.map { " (\($0) release channel — same app, pre-release build)" } ?? ""
+            lines.append("Bundle: \(canonical) version \(anomaly.identity.appVersion ?? "unknown")\(channelNote)")
         }
         // Hard facts — state these correctly, never guess them.
         lines.append("Runs as: \(anomaly.identity.ownerIsRoot ? "root (a system account)" : "the user's own account"). Do NOT describe the process's ownership any other way.")
@@ -375,15 +388,24 @@ public struct JudgmentEngine: Sendable {
                 "Knowledge map — safetyTier: \(entry.safetyTier)",
                 "Knowledge map — causallyLinked: \(entry.causallyLinked.joined(separator: ", "))",
             ])
-        } else if let bundleID = anomaly.identity.bundleID {
+        } else if anomaly.identity.bundleID != nil {
             // No curated entry, but the bundle id NAMES the app — the hard fact
             // the model anchors on instead of inventing an identity. This is
-            // the "we KNOW it's Chrome" path (com.google.Chrome.helper.*): the
-            // model gets a real, grounded assessment instead of "no identity".
+            // the "we KNOW it's Chrome" path (com.google.Chrome.helper.*).
+            // CRITICAL: use the CANONICAL id and forbid reading meaning out of
+            // the string. A channel suffix ("-Preview") or role segment
+            // ("-Helper") once got read as a *description* — the model saw
+            // dev.zed.Zed-Preview and invented "a preview tool / close the
+            // preview window." The id names the app; it is never a description.
+            let canonical = anomaly.identity.canonicalBundleID ?? anomaly.identity.bundleID!
+            var idLine = "No curated knowledge-map entry exists, but this process belongs to a known application, identified by its bundle id: \(canonical)\(anomaly.identity.appVersion.map { " (version \($0))" } ?? "")."
+            if let channel = anomaly.identity.releaseChannel {
+                idLine += " This is the \(channel) release channel of that SAME app — a pre-release/variant build, not a different or special-purpose program."
+            }
             lines.append(contentsOf: [
-                "No curated knowledge-map entry exists, but this process belongs to a known application, identified by its bundle id: \(bundleID)\(anomaly.identity.appVersion.map { " (version \($0))" } ?? "").",
-                "It is a component/subprocess of that app. You DO know mainstream apps — browsers, editors, Electron apps, developer tools — so identify from the bundle id what this subprocess most likely does and assess the anomaly factually.",
-                "Anchor every identity claim in that bundle id; never assert details it does not support. If you genuinely do not recognize the app the bundle id names, say so plainly and stay conservative (safety tier 3).",
+                idLine,
+                "The bundle id NAMES the app; it is not a description. NEVER infer what the process does from words or suffixes inside the id — a '-Preview'/'-Nightly'/'-Beta' segment is a release channel and a '-Helper'/'-Renderer' segment is a component role, neither is a feature to describe.",
+                "Identify the app ONLY if you genuinely recognize it from the canonical bundle id. If you do, describe THAT app (browsers, editors, Electron apps, developer tools) and assess the anomaly factually. If you do NOT recognize it, say so plainly and stay conservative (safety tier 3) — never invent a purpose.",
             ])
         } else {
             lines.append("No knowledge-map entry and no app identity: this is an UNKNOWN process. Safety tier must be 3.")

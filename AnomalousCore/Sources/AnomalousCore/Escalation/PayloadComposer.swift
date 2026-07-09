@@ -37,12 +37,25 @@ public struct PayloadComposer: Sendable {
     public struct MetricCurves: Codable, Sendable {
         public let cpuPercent: [Double]?
         public let rssMB: [Double]?
+        public let gpuPercent: [Double]?
+        public let wakeupsPerSecond: [Double]?
+        public let diskBytesPerSecond: [Double]?
+        /// The driving-metric curve for any kind not covered by a named field
+        /// above (novel process, hung app, or a future rule). ALWAYS carries a
+        /// curve when nothing else does, so `metric_curves` is never emitted as
+        /// an empty object — an empty object fails the server's `required` rule
+        /// and 422s the whole request (the GPU/wakeups/disk-anomaly bug).
+        public let drivingCurve: [Double]?
         public let baselineCPUPercent: Double?
         public let baselineRSSMB: Double?
 
         enum CodingKeys: String, CodingKey {
             case cpuPercent = "cpu_percent"
             case rssMB = "rss_mb"
+            case gpuPercent = "gpu_percent"
+            case wakeupsPerSecond = "wakeups_per_second"
+            case diskBytesPerSecond = "disk_bytes_per_second"
+            case drivingCurve = "driving_metric_curve"
             case baselineCPUPercent = "baseline_cpu_percent"
             case baselineRSSMB = "baseline_rss_mb"
         }
@@ -71,14 +84,35 @@ public struct PayloadComposer: Sendable {
             anomalyType: anomaly.kind.rawValue,
             installSource: anomaly.identity.installSource.rawValue,
             summary: "\(anomaly.kind.rawValue) anomaly in \(anomaly.identity.executableName). Runs as \(anomaly.identity.ownerIsRoot ? "root" : "the user's account"); \(anomaly.identity.installSource.phrase). \(baselineSentence)\(Self.judgmentFacts(for: anomaly))",
-            metricCurves: MetricCurves(
-                cpuPercent: anomaly.kind == .sustainedCPU || anomaly.kind == .cpuTimeRatio ? anomaly.magnitudeCurve : nil,
-                // memory.leak_footprint's curve is MB too — it rides the
-                // existing rss_mb field (footprint is the honest successor).
-                rssMB: anomaly.kind == .rssLeak || anomaly.kind == .rssCeiling || anomaly.kind == .memoryLeakFootprint ? anomaly.magnitudeCurve : nil,
-                baselineCPUPercent: anomaly.kind == .sustainedCPU ? anomaly.baselineValue : nil,
-                baselineRSSMB: anomaly.kind == .rssLeak || anomaly.kind == .memoryLeakFootprint ? anomaly.baselineValue : nil
-            )
+            metricCurves: Self.curves(for: anomaly)
+        )
+    }
+
+    /// Map the anomaly's single magnitude curve to the right named field for
+    /// its kind, and ALWAYS fall back to `driving_metric_curve` when no named
+    /// field applies — so `metric_curves` is guaranteed non-empty for every
+    /// anomaly kind (an empty object 422s at the server's `required` rule).
+    static func curves(for anomaly: Anomaly) -> MetricCurves {
+        let curve = anomaly.magnitudeCurve
+        let cpu = (anomaly.kind == .sustainedCPU || anomaly.kind == .cpuTimeRatio) ? curve : nil
+        // memory.leak_footprint's curve is MB too — it rides rss_mb (footprint
+        // is the honest successor).
+        let rss = (anomaly.kind == .rssLeak || anomaly.kind == .rssCeiling || anomaly.kind == .memoryLeakFootprint) ? curve : nil
+        let gpu = (anomaly.kind == .gpuSaturation) ? curve : nil
+        let wakeups = (anomaly.kind == .energyWakeups) ? curve : nil
+        let disk = (anomaly.kind == .diskThrash) ? curve : nil
+        // Anything not covered above (novel process, hung app, future rules)
+        // still carries its curve here, so the object is never empty.
+        let driving = (cpu ?? rss ?? gpu ?? wakeups ?? disk) == nil ? curve : nil
+        return MetricCurves(
+            cpuPercent: cpu,
+            rssMB: rss,
+            gpuPercent: gpu,
+            wakeupsPerSecond: wakeups,
+            diskBytesPerSecond: disk,
+            drivingCurve: driving,
+            baselineCPUPercent: anomaly.kind == .sustainedCPU ? anomaly.baselineValue : nil,
+            baselineRSSMB: anomaly.kind == .rssLeak || anomaly.kind == .memoryLeakFootprint ? anomaly.baselineValue : nil
         )
     }
 

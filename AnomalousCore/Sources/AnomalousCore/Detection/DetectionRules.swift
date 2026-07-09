@@ -3,7 +3,7 @@ import Foundation
 /// An anomaly the detection rules produced. Pure data — the judgment layer
 /// decides what it means; the action layer decides what can be done.
 public struct Anomaly: Sendable, Equatable {
-    public enum Kind: String, Sendable {
+    public enum Kind: String, Sendable, CaseIterable {
         case sustainedCPU = "sustained_cpu"
         case cpuTimeRatio = "cputime_ratio"
         case rssLeak = "rss_leak"
@@ -128,6 +128,14 @@ public struct DetectionThresholds: Sendable {
     public var rssGrowthMultiple: Double = 2.0
     public var rssGrowthWindow: TimeInterval = 30 * 60
     public var rssFloorBytes: UInt64 = 512 * 1024 * 1024
+    /// Leak HEAL gate: a leak is ONGOING growth, not a one-time ramp that
+    /// settled. Once memory plateaus, the old low sample lingers in-window so
+    /// end ≥ 2× start stays true forever and the card never clears (a code
+    /// editor that loaded a big project and stabilized at 3.5 GB kept nagging
+    /// for an hour). Require the recent tail of the window to still be climbing
+    /// past this multiple; a flat tail means "settled at a new plateau, not
+    /// leaking" and the rule stops firing so the card auto-resolves.
+    public var leakTailGrowthMultiple: Double = 1.05
     /// Absolute ceiling for non-allowlisted processes.
     public var rssCeilingBytes: UInt64 = 16 * 1024 * 1024 * 1024
 
@@ -373,6 +381,18 @@ public enum DetectionRules {
         for value in curve {
             if value < UInt64(Double(peak) * 0.9) { return nil }
             peak = max(peak, value)
+        }
+
+        // Heal gate: only fire while the leak is STILL growing. Compare the
+        // recent tail (≈ the final third of the window, always at least the last
+        // two samples apart) to its start; a flat tail means the process settled
+        // at a plateau — a one-time ramp, not an ongoing leak — so stop firing
+        // and let the card auto-resolve instead of pinning a stable-but-large
+        // process on screen indefinitely.
+        if curve.count >= 3 {
+            let tailIndex = min(curve.count - 2, (curve.count * 2) / 3)
+            let tailStart = curve[tailIndex]
+            if end < UInt64(Double(tailStart) * thresholds.leakTailGrowthMultiple) { return nil }
         }
 
         let megabytes = curve.map { Double($0) / 1_048_576 }

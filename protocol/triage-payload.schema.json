@@ -12,6 +12,8 @@
     "app_version": { "type": "string", "maxLength": 64 },
     "os_version": { "type": "string", "maxLength": 32 },
     "hardware_class": { "type": ["string", "null"], "maxLength": 32 },
+    "anomaly_type": { "type": "string", "maxLength": 64, "description": "The anomaly KIND (e.g. 'gpu.saturation', 'sustained_cpu'). A condition dimension the backend caches on — never identifiable." },
+    "install_source": { "type": "string", "maxLength": 32, "description": "How the binary was installed (e.g. 'app_store', 'homebrew', 'developer_id'), derived on-device from its local-only path. The path itself never leaves." },
     "summary": {
       "type": "string",
       "maxLength": 8000,
@@ -20,9 +22,14 @@
     "metric_curves": {
       "type": "object",
       "additionalProperties": false,
+      "description": "Numeric magnitude curves for the anomaly's driving metric — plain numbers, never identifiable. The offending metric maps to its named field; anything without a named field rides driving_metric_curve, so this object is never empty (an empty object is rejected server-side).",
       "properties": {
         "cpu_percent": { "type": "array", "items": { "type": "number" }, "maxItems": 240 },
         "rss_mb": { "type": "array", "items": { "type": "number" }, "maxItems": 240 },
+        "gpu_percent": { "type": "array", "items": { "type": "number" }, "maxItems": 240 },
+        "wakeups_per_second": { "type": "array", "items": { "type": "number" }, "maxItems": 240 },
+        "disk_bytes_per_second": { "type": "array", "items": { "type": "number" }, "maxItems": 240 },
+        "driving_metric_curve": { "type": "array", "items": { "type": "number" }, "maxItems": 240, "description": "Fallback curve for any anomaly kind without a named field above (novel process, hung app, future rules), so metric_curves is always non-empty." },
         "baseline_cpu_percent": { "type": ["number", "null"] },
         "baseline_rss_mb": { "type": ["number", "null"] }
       }

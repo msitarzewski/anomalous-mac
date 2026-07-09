@@ -378,6 +378,27 @@ struct FootprintLeakRuleTests {
         )
         #expect((anomaly?.baselineDeviation ?? 0) > 8)
     }
+
+    @Test("heals once memory plateaus — a one-time ramp that settled is not an ongoing leak")
+    func healsOnPlateau() {
+        // Ramp 400 → 3500 MB over the first half (a big project loaded), then
+        // FLAT for the rest of the window. end is still ≥ 2× start, so without
+        // the heal gate this fires forever and the card sits for an hour.
+        var footprint = (0...15).map { 400.0 + Double($0) * 200 }   // 400 → 3400
+        footprint += Array(repeating: 3500.0, count: 15)            // plateau at 3500
+        #expect(DetectionRules.footprintLeakAnomaly(
+            history: counterSamples(minutes: 30, footprintMB: footprint)
+        ) == nil)
+    }
+
+    @Test("still fires while growth continues into the recent tail")
+    func firesWhileStillGrowing() {
+        // Same start/end magnitudes, but growth continues through the tail.
+        let footprint = (0...30).map { 400.0 + Double($0) * 100 }   // 400 → 3400, steady climb
+        #expect(DetectionRules.footprintLeakAnomaly(
+            history: counterSamples(minutes: 30, footprintMB: footprint)
+        )?.kind == .memoryLeakFootprint)
+    }
 }
 
 @Suite("memory ceiling on the primary (footprint-first) memory number")

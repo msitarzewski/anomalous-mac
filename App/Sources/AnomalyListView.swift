@@ -32,7 +32,7 @@ struct AnomalyListView: View {
                     ForEach(appState.anomalies) { judged in
                         DiagnosisCardView(judged: judged, onDismiss: {
                             appState.dismiss(judged)
-                        }, appState: appState)
+                        }, appState: appState, showGetHelp: appState.anomalies.count > 1)
                     }
                 }
                 if appState.anomalies.count > 4 {
@@ -157,6 +157,12 @@ struct AnomalyListView: View {
     /// diagnoses, so it stays quiet and uncluttered.
     private var footer: some View {
         HStack {
+            // Single anomaly: hoist its Get Help into the popover footer's open
+            // space (bottom-left, opposite the gear). Multiple anomalies keep
+            // Get Help per-card, so this stays empty and the gear sits alone.
+            if appState.anomalies.count == 1, let only = appState.anomalies.first, !only.isResolved {
+                GetHelpControl(judged: only, appState: appState)
+            }
             Spacer()
             Menu {
                     Button("Check for Updates…") {
@@ -207,6 +213,10 @@ struct DiagnosisCardView: View {
     let judged: AppState.JudgedAnomaly
     let onDismiss: () -> Void
     var appState: AppState? = nil
+    /// When there's a single anomaly, Get Help is hoisted to the popover footer
+    /// (its "perfect space"), so the card suppresses its own copy. With multiple
+    /// anomalies a global button can't target one card, so each keeps its own.
+    var showGetHelp: Bool = true
     @State private var isHovering = false
     @State private var confirming = false
     @State private var confirmingAck = false
@@ -218,24 +228,24 @@ struct DiagnosisCardView: View {
     @State private var expanded = false
 
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
-            VStack(alignment: .leading, spacing: 6) {
-                header                      // name · status · kind · dismiss
-                anomalyHighlight            // geeky: the numbers ("is this normal?")
-                plainSummary                // processed: plain "what this means"
-                groupedObservations        // one-line "also:" for a grouped insight
-                discoveryRow                // "Sourced by Anomalous" / looking up / Look it up
-                if expanded { identityDetail }   // deep detail on demand
-                if !judged.isResolved {
-                    actionRow               // "Now what?" — terse verbs + Get help
-                        .padding(.top, 6)   // breathing room above the buttons
-                    acknowledgmentRow       // "Normal for me" + Snooze (Phase 4)
-                }
-                if case .completed(let result) = judged.escalation {
-                    expertResult(result)
-                }
+        VStack(alignment: .leading, spacing: 6) {
+            titleRow                    // process name (full width) · dismiss ×
+            badges                      // status · kind · re-alert pills (own row)
+            anomalyHighlight            // geeky: the numbers ("is this normal?")
+            plainSummary                // processed: plain "what this means"
+            groupedObservations        // one-line "also:" for a grouped insight
+            discoveryRow                // "Sourced by Anomalous" / looking up / Look it up
+            if confirmingAck { ackConfirm }  // the "Normal for me" teaching two-step
+            if expanded { identityDetail }   // deep detail on demand
+            if !judged.isResolved {
+                actionRow               // remediation verbs on their own row
+                    .padding(.top, 4)
             }
-            disclosureChevron               // fully right, vertically centered
+            if case .completed(let result) = judged.escalation {
+                expertResult(result)
+            }
+            footer                      // Get Help CTA · Details toggle · ⋯ card menu
+                .padding(.top, 4)
         }
         .padding(14)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
@@ -267,69 +277,176 @@ struct DiagnosisCardView: View {
         }
     }
 
-    /// Disclosure affordance at the card's far-right edge, vertically
-    /// centered: points right when collapsed, rotates to point down when
-    /// open. A real button so VoiceOver/keyboard can toggle it too.
-    private var disclosureChevron: some View {
+    /// The card footer: the Get Help CTA on the left, and the disclosure +
+    /// per-card menu on the right. Keeps the busy middle of the card for the
+    /// diagnosis; everything you DO with the card lives on this one bottom row.
+    private var footer: some View {
+        HStack(spacing: 8) {
+            if showGetHelp, !judged.isResolved, let appState {
+                GetHelpControl(judged: judged, appState: appState)
+            }
+            Spacer(minLength: 8)
+            detailsToggle
+            if !judged.isResolved, appState != nil { cardMenu }
+        }
+    }
+
+    /// "Details ⌄" — the disclosure, now a plain bottom toggle (replaces the
+    /// old right-edge chevron rail so the title row owns the full width). The
+    /// whole card is still tappable to expand.
+    private var detailsToggle: some View {
         Button {
             withAnimation(.snappy(duration: 0.28)) { expanded.toggle() }
         } label: {
-            Image(systemName: "chevron.right")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.tertiary)
-                .rotationEffect(.degrees(expanded ? 90 : 0))
-                .frame(width: 20)
-                .contentShape(Rectangle())
+            HStack(spacing: 3) {
+                Text(expanded ? "Hide details" : "Details")
+                Image(systemName: "chevron.down")
+                    .rotationEffect(.degrees(expanded ? 180 : 0))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(expanded ? "Hide details" : "Show details")
     }
 
-    /// Process name + spelled-out status + kind badge, with the disclosure
-    /// chevron and dismiss on the right.
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
-            Text(judged.anomaly.identity.executableName).font(.headline)
+    /// The per-card overflow menu (bottom-right): the "manage this card"
+    /// actions that don't warrant a always-visible button — mark normal for
+    /// this Mac (the teaching two-step) and snooze.
+    @ViewBuilder
+    private var cardMenu: some View {
+        if let appState {
+            Menu {
+                Button {
+                    confirmingAck = true
+                } label: {
+                    Label("Normal for me", systemImage: "checkmark.seal")
+                }
+                Menu {
+                    Button {
+                        Task { await appState.snooze(judged, for: 3600) }
+                    } label: {
+                        Label("For 1 hour", systemImage: "moon.zzz")
+                    }
+                    Button {
+                        Task { await appState.snoozeToday(judged) }
+                    } label: {
+                        Label("Rest of today", systemImage: "moon.zzz.fill")
+                    }
+                } label: {
+                    Label("Snooze", systemImage: "moon.zzz")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Card options — accept this as normal for your Mac, or snooze it.")
+            .accessibilityLabel("Card options: normal for me, snooze")
+        }
+    }
+
+    /// The "Normal for me" teaching two-step: the intent-heuristic prompt + a
+    /// clear confirm. Chosen from the card menu; rendered inline because the
+    /// copy (what accepting means, and that it never mutes) is the point.
+    @ViewBuilder
+    private var ackConfirm: some View {
+        if let appState {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(appState.ackPrompt(for: judged))
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Button {
+                        confirmingAck = false
+                        Task { await appState.acknowledge(judged) }
+                    } label: {
+                        Label("Yes, normal for me", systemImage: "checkmark.seal")
+                    }
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+                    Button("Cancel") { confirmingAck = false }
+                        .controlSize(.small)
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    /// The title row: the process name owns the full width (names get long —
+    /// bundle-suffixed helpers especially), truncating with a hover tooltip
+    /// carrying the full name; only the dismiss × (or resolved badge) shares
+    /// the row, pinned right so the title truncates before it.
+    private var titleRow: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text(judged.anomaly.identity.executableName)
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(judged.anomaly.identity.executableName)
+            trailingControl
+        }
+    }
+
+    /// Resolved badge when the anomaly cleared on its own, else the dismiss ×.
+    @ViewBuilder
+    private var trailingControl: some View {
+        if judged.isResolved {
+            // Cleared on its own (recovered or the process exited). Brief badge,
+            // then the tick removes the card and files it in the Journal.
+            Label("Resolved", systemImage: "checkmark.circle.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.green)
+                .labelStyle(.titleAndIcon)
+                .fixedSize()
+                .accessibilityLabel("\(judged.anomaly.identity.executableName) anomaly resolved")
+        } else {
+            // Always in the hierarchy for VoiceOver/keyboard (WCAG 2.1.1);
+            // hover only brightens. 24×24 target (WCAG 2.5.8).
+            Button { onDismiss() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+                    .opacity(isHovering ? 1 : 0.6)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss — hides this card. It does NOT stop the process; use the action buttons for that.")
+            .accessibilityLabel("Dismiss \(judged.anomaly.identity.executableName) anomaly")
+        }
+    }
+
+    /// The badges/pills row, directly under the title: spelled-out status, the
+    /// anomaly kind, and the anti-mute re-alert marker when a condition earned
+    /// its way back (icon + words, never color alone).
+    private var badges: some View {
+        HStack(spacing: 7) {
             statusPill
-            Text(judged.anomaly.kind.rawValue.replacingOccurrences(of: "_", with: " "))
-                .font(.caption)
-                .padding(.horizontal, 7).padding(.vertical, 2)
-                .background(.secondary.opacity(0.15), in: Capsule())
-            // Anti-mute re-alert marker: an acknowledged condition earned its
-            // way back. Icon + words (never color alone).
+            kindPill
             if let marker = judged.returnedWorse {
                 Label(marker, systemImage: "arrow.uturn.up.circle.fill")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.orange)
                     .accessibilityLabel("Re-alert: \(marker)")
             }
-
-            Spacer()
-
-            if judged.isResolved {
-                // The anomaly cleared on its own (recovered or the process
-                // exited). Brief resolved badge, then the tick removes the card
-                // and files it in the Journal.
-                Label("Resolved", systemImage: "checkmark.circle.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.green)
-                    .labelStyle(.titleAndIcon)
-                    .accessibilityLabel("\(judged.anomaly.identity.executableName) anomaly resolved")
-            } else {
-                // Always in the hierarchy for VoiceOver/keyboard (WCAG 2.1.1);
-                // hover only brightens. 24×24 target (WCAG 2.5.8).
-                Button { onDismiss() } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                        .opacity(isHovering ? 1 : 0.6)
-                        .frame(width: 24, height: 24)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Dismiss — hides this card. It does NOT stop the process; use the action buttons for that.")
-                .accessibilityLabel("Dismiss \(judged.anomaly.identity.executableName) anomaly")
-            }
+            Spacer(minLength: 0)
         }
+    }
+
+    /// The anomaly-kind pill (e.g. "memory.leak footprint").
+    private var kindPill: some View {
+        Text(judged.anomaly.kind.rawValue.replacingOccurrences(of: "_", with: " "))
+            .font(.caption)
+            .lineLimit(1)
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .background(.secondary.opacity(0.15), in: Capsule())
     }
 
     /// Spelled-out status: an icon (shape + color) plus the word in
@@ -442,14 +559,10 @@ struct DiagnosisCardView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 2)
         case .failed(let message):
-            HStack(spacing: 6) {
-                Text(message).font(.caption).foregroundStyle(.orange)
-                if let appState {
-                    Button("Retry") { appState.lookUp(judged) }
-                        .buttonStyle(.plain).font(.caption)
-                }
+            if let appState {
+                InlineRetryError(message: message) { appState.lookUp(judged) }
+                    .padding(.top, 2)
             }
-            .padding(.top, 2)
         case .none:
             // Per-card on-demand lookup for a genuinely-unknown card when the
             // global toggle is OFF — a single-process consent (also logged).
@@ -498,8 +611,10 @@ struct DiagnosisCardView: View {
         .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
-    /// "Now what?" — terse action verbs on the left, Get help on the right.
-    /// (Tier status is shown once, in the header.)
+    /// The remediation verbs on their own row — smaller buttons now, the
+    /// recommended action prominent and the rest default. Get Help and the
+    /// acknowledgment verbs moved out (to the footer CTA and the ⋯ card menu),
+    /// so this row is purely "act on the process."
     private var actionRow: some View {
         HStack(alignment: .center, spacing: 8) {
             if let sudoCommand {
@@ -507,66 +622,7 @@ struct DiagnosisCardView: View {
             } else {
                 primaryActions
             }
-            Spacer(minLength: 8)
-            escalationControls
-        }
-    }
-
-    /// Phase 4's acknowledgment verbs — the loop that TEACHES instead of
-    /// muting. "Normal for me" raises this condition's envelope (two-step,
-    /// with the intent-heuristic first-touch copy); Snooze is time-boxed.
-    /// Icon + word on every control, never color alone (design-guidelines.md).
-    @ViewBuilder
-    private var acknowledgmentRow: some View {
-        if let appState {
-            if confirmingAck {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(appState.ackPrompt(for: judged))
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 8) {
-                        Button {
-                            confirmingAck = false
-                            Task { await appState.acknowledge(judged) }
-                        } label: {
-                            Label("Yes, normal for me", systemImage: "checkmark.seal")
-                        }
-                        .controlSize(.regular)
-                        Button("Cancel") { confirmingAck = false }
-                            .controlSize(.regular)
-                    }
-                }
-                .padding(.top, 4)
-            } else {
-                HStack(spacing: 8) {
-                    Button {
-                        confirmingAck = true
-                    } label: {
-                        Label("Normal for me", systemImage: "checkmark.seal")
-                    }
-                    .controlSize(.regular)
-                    .help("Accepts this much as normal for this process. Never mutes — you're re-alerted if it gets materially worse, changes behavior, or restarts.")
-
-                    Menu {
-                        Button {
-                            Task { await appState.snooze(judged, for: 3600) }
-                        } label: {
-                            Label("For 1 hour", systemImage: "moon.zzz")
-                        }
-                        Button {
-                            Task { await appState.snoozeToday(judged) }
-                        } label: {
-                            Label("Rest of today", systemImage: "moon.zzz.fill")
-                        }
-                    } label: {
-                        Label("Snooze", systemImage: "moon.zzz")
-                    }
-                    .fixedSize()
-                    .help("Hides this card for a while. It re-surfaces when the snooze expires if still active — sooner if it gets materially worse.")
-                }
-                .padding(.top, 2)
-            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -610,11 +666,15 @@ struct DiagnosisCardView: View {
             HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Working…").font(.callout).foregroundStyle(.secondary) }
         } else if let appState, let service = brewService {
             if confirmingBrew {
-                Button("Stop", role: .destructive) { brew("stop", service, appState) }.controlSize(.regular)
-                Button("Cancel") { confirmingBrew = false }.controlSize(.regular)
+                Button("Stop", role: .destructive) { brew("stop", service, appState) }
+                    .controlSize(.small).buttonStyle(.borderedProminent)
+                Button("Cancel") { confirmingBrew = false }.controlSize(.small)
             } else {
-                Button("Stop") { confirmingBrew = true }.controlSize(.regular)
-                Button("Restart") { brew("restart", service, appState) }.controlSize(.regular)
+                // Restart is the recommended (reversible) remedy — make it the
+                // active button; Stop stays a default secondary.
+                Button("Restart") { brew("restart", service, appState) }
+                    .controlSize(.small).buttonStyle(.borderedProminent)
+                Button("Stop") { confirmingBrew = true }.controlSize(.small)
             }
         } else {
             processActions
@@ -626,18 +686,26 @@ struct DiagnosisCardView: View {
         let action = judged.action
         if action != .explainOnly, let appState {
             if confirming && action.isDestructive {
-                Button(action.verb, role: .destructive) { run(action, appState, force: false) }.controlSize(.regular)
+                // Commit step: the destructive verb turns red (role); Force Quit
+                // and Cancel are default secondaries beside it.
+                Button(action.verb, role: .destructive) { run(action, appState, force: false) }
+                    .controlSize(.small).buttonStyle(.borderedProminent)
                 if action == .terminate {
                     // Force Quit is SIGKILL — no chance to save. Gate it behind
                     // its own explicit confirmation, above the graceful Quit.
-                    Button("Force Quit", role: .destructive) { confirmingForceQuit = true }.controlSize(.regular)
+                    Button("Force Quit", role: .destructive) { confirmingForceQuit = true }
+                        .controlSize(.small)
                 }
-                Button("Cancel") { confirming = false }.controlSize(.regular)
+                Button("Cancel") { confirming = false }.controlSize(.small)
             } else {
-                Button(action.verb, role: action.isDestructive ? .destructive : nil) {
+                // Resting state: the recommended verb is the active (prominent)
+                // button. It's accent-colored, not red — the red commit only
+                // appears after the two-step confirm.
+                Button(action.verb) {
                     if action.isDestructive { confirming = true } else { run(action, appState, force: false) }
                 }
-                .controlSize(.regular)
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
             }
         }
     }
@@ -705,17 +773,32 @@ struct DiagnosisCardView: View {
         }
     }
 
-    /// Paid triage escalation — right-aligned. Offered only for thin local
-    /// diagnoses (unknown/explain-only) AND only when signed in.
+}
+
+/// The "Get Help" escalation control — the idle CTA (prominent, glowing) and
+/// its in-flight/answered states. A standalone view so it renders either in a
+/// card's footer (when there are multiple anomalies) or hoisted into the
+/// popover footer when there's a single anomaly (the common case). Offered on
+/// any anomaly when signed in — a non-technical user may want expert help even
+/// on a "Safe" diagnosis.
+struct GetHelpControl: View {
+    let judged: AppState.JudgedAnomaly
+    let appState: AppState
+
     @ViewBuilder
-    private var escalationControls: some View {
-        // Available on any anomaly when signed in — a non-technical user may
-        // want expert help even on a "safe" diagnosis. (Especially valuable
-        // for unknown/explain-only cases, but never hidden on the rest.)
-        if let appState, appState.canEscalate {
+    var body: some View {
+        if appState.canEscalate {
             switch judged.escalation {
             case .idle:
-                Button("Get help") { Task { await appState.escalate(judged) } }.controlSize(.regular)
+                // The CTA: an expert answer is a tap away. Prominent + a soft
+                // accent glow so it reads as the invited next step.
+                Button { Task { await appState.escalate(judged) } } label: {
+                    Label("Get Help", systemImage: "sparkles")
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .shadow(color: .accentColor.opacity(0.55), radius: 7)
+                .help("Send this diagnosis for an expert answer with cited sources.")
             case .sending:
                 HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Sending…").font(.callout).foregroundStyle(.secondary) }
             case .sent(let id):
@@ -723,11 +806,40 @@ struct DiagnosisCardView: View {
             case .completed:
                 Label("Expert answer ready", systemImage: "checkmark.seal").font(.caption).foregroundStyle(.green)
             case .failed(let message):
-                HStack(spacing: 6) {
-                    Text(message).font(.caption).foregroundStyle(.orange)
-                    Button("Retry") { Task { await appState.escalate(judged) } }.buttonStyle(.plain).font(.caption)
-                }
+                InlineRetryError(message: message) { Task { await appState.escalate(judged) } }
             }
         }
+    }
+}
+
+/// A compact, consistent "that didn't work — try again" affordance: a warning
+/// glyph, a plain-language message, and a real Retry button (not plain text) in
+/// a soft error-tinted pill. Used wherever a background operation the user
+/// kicked off can fail — expert help, discovery lookup — so failures read the
+/// same everywhere instead of as bare orange text.
+struct InlineRetryError: View {
+    let message: String
+    let retry: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Retry", action: retry)
+                .controlSize(.small)
+                .buttonStyle(.bordered)
+        }
+        .padding(.leading, 9)
+        .padding(.trailing, 5)
+        .padding(.vertical, 4)
+        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.orange.opacity(0.28), lineWidth: 1))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(message). Retry.")
     }
 }

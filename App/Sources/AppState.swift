@@ -878,7 +878,10 @@ final class AppState {
     private func judge(_ anomaly: Anomaly, returnedWorse: String? = nil) async {
         guard let knowledgeMap else { return }
         let processKey = BaselineStore.key(for: anomaly.identity)
-        let hasCorpusEntry = knowledgeMap.entry(forProcessName: anomaly.identity.executableName) != nil
+        // Channel-aware: a variant like dev.zed.Zed-Preview resolves to the base
+        // app's record, so it is NOT treated as unknown (which would fire a
+        // needless discovery and let a model guess stand). Mirrors the engine.
+        let hasCorpusEntry = knowledgeMap.entry(for: anomaly.identity) != nil
 
         // Clean, human "so what" — the observed deviation in plain terms, no
         // rule names or window-in-minutes. What's normal + what's happening now.
@@ -1691,6 +1694,8 @@ final class AppState {
         switch error {
         case EscalationClient.EscalationError.unauthorized: return "Sign in again"
         case EscalationClient.EscalationError.insufficientBalance: return "Add credit to escalate"
+        case EscalationClient.EscalationError.timedOut: return "Still working — try again in a moment"
+        case EscalationClient.EscalationError.server: return "The service hit a snag — try again"
         default: return "Couldn't reach the service"
         }
     }

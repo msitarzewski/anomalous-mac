@@ -30,6 +30,22 @@ struct EscalationPayloadTests {
         #expect(!raw.contains("--"))   // no command-line flags
     }
 
+    @Test("metric_curves is never empty — EVERY anomaly kind maps to a curve, or the server 422s the whole request")
+    func metricCurvesNeverEmpty() throws {
+        for kind in Anomaly.Kind.allCases {
+            let a = Anomaly(
+                kind: kind,
+                identity: ProcessIdentity(pid: 1, startAbsTime: 1, executableName: "someproc", bundleID: "com.example.App"),
+                windowSeconds: 1800, magnitudeCurve: [10, 20, 30], baselineValue: 5, detectedAt: .now
+            )
+            let payload = PayloadComposer().compose(anomaly: a, baselineSentence: "b", osVersion: "27.0", hardwareClass: "x")
+            let obj = try JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as! [String: Any]
+            let curves = obj["metric_curves"] as? [String: Any]
+            #expect(curves != nil && !(curves!.isEmpty),
+                    "metric_curves empty for kind \(kind.rawValue) — this 422s at the server's required rule and breaks Get Help")
+        }
+    }
+
     @Test("escalation client logs the exact bytes before sending")
     func logsBeforeSend() async throws {
         let dir = FileManager.default.temporaryDirectory.appending(path: "esc-test-\(UUID().uuidString)")

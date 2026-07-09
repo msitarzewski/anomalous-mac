@@ -43,6 +43,24 @@ public struct KnowledgeMap: Sendable {
         entries[name]
     }
 
+    /// Resolve a process to its corpus entry, tolerating channel-variant naming.
+    /// An exact executable-name hit always wins; on a miss, a channel-suffixed
+    /// bundle id (`dev.zed.Zed-Preview`) falls back to its canonical leaf
+    /// ("Zed"), matched case-insensitively — so the Preview channel REUSES the
+    /// base app's `zed` record instead of dropping to a bundle-id guess. Both
+    /// the app's `hasCorpusEntry` gate and the engine's grounding go through
+    /// here, so they never disagree about whether a process is known.
+    public func entry(for identity: ProcessIdentity) -> KnowledgeEntry? {
+        if let exact = entries[identity.executableName] { return exact }
+        // Fallback ONLY for a recognized channel variant (dev.zed.Zed-Preview):
+        // reuse the base app's record via the canonical bundle leaf, matched
+        // case-insensitively. Gated on the channel so an ordinary app's bundle
+        // leaf can never be loosely matched into a wrong (and possibly
+        // "safe-to-kill") identity.
+        guard identity.releaseChannel != nil, let leaf = identity.canonicalBundleLeaf else { return nil }
+        return entries.values.first { $0.processName.caseInsensitiveCompare(leaf) == .orderedSame }
+    }
+
     public var count: Int { entries.count }
 
     /// All entries (stable order by process name) — the corpus-merge and
