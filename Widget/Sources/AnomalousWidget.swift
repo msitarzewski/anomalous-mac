@@ -4,7 +4,7 @@ import AppIntents
 import AnomalousCore
 
 // The ambient status widget — silence, made visible (phase-4). At rest it is
-// deliberately IGNORABLE: the dimmed Anomalous mark and "All nominal", no
+// deliberately IGNORABLE: the dimmed Anomalous mark and "All systems nominal.", no
 // gauges, no ticking numbers (the incumbents' anxiety theater). It comes to
 // life only when a confirmed (high-confidence, surfaced) anomaly exists, and
 // then it offers the same acknowledgment verbs as the card, inline.
@@ -77,7 +77,8 @@ struct StatusWidgetView: View {
         }
     }
 
-    /// At rest: the mark, dimmed, and two calm words. Ignorable on purpose.
+    /// At rest: the mark, dimmed, and one calm line — matching the menu-bar
+    /// popover's "All systems nominal." Ignorable on purpose.
     private var nominal: some View {
         VStack(spacing: 8) {
             Image("StatusMark")
@@ -85,9 +86,10 @@ struct StatusWidgetView: View {
                 .scaledToFit()
                 .frame(width: 34, height: 34)
                 .foregroundStyle(.tertiary)
-            Text(status.monitoringEnabled ? "All nominal" : "Monitoring paused")
+            Text(status.monitoringEnabled ? "All systems nominal." : "Monitoring paused")
                 .font(.body)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityLabel(status.monitoringEnabled

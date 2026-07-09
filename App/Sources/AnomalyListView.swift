@@ -11,10 +11,28 @@ private extension String {
     }
 }
 
+/// Carries the card stack's natural (unclamped) height up so the scroll frame
+/// can be capped to min(natural, screen-fit).
+private struct CardsHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct AnomalyListView: View {
     @Bindable var appState: AppState
     let updater: UpdaterController
     @Environment(\.openSettings) private var openSettings
+    @State private var measuredCardsHeight: CGFloat = 0
+
+    /// Cap for the scrollable card stack — the whole popover must fit the
+    /// screen (the MenuBarExtra window sizes to intrinsic content, so an
+    /// unbounded stack runs off-screen). Leaves room for the header, helper
+    /// banner, divider, and footer.
+    private static var maxCardsHeight: CGFloat {
+        max(240, (NSScreen.main?.visibleFrame.height ?? 900) - 240)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -35,12 +53,19 @@ struct AnomalyListView: View {
                         }, appState: appState, showGetHelp: appState.anomalies.count > 1)
                     }
                 }
-                if appState.anomalies.count > 4 {
-                    ScrollView { cards }
-                        .frame(height: 460)
-                } else {
+                // Measure the natural stack height and cap it: frame =
+                // min(natural, cap), so a short stack shows no empty space and a
+                // tall one (even a single tall card) scrolls instead of running
+                // off-screen. Only scrolls when it actually overflows.
+                ScrollView {
                     cards
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: CardsHeightKey.self, value: g.size.height)
+                        })
                 }
+                .frame(height: min(measuredCardsHeight == 0 ? Self.maxCardsHeight : measuredCardsHeight, Self.maxCardsHeight))
+                .scrollBounceBehavior(.basedOnSize)
+                .onPreferenceChange(CardsHeightKey.self) { measuredCardsHeight = $0 }
             }
 
             helperBanner
@@ -231,15 +256,21 @@ struct DiagnosisCardView: View {
         VStack(alignment: .leading, spacing: 6) {
             titleRow                    // process name (full width) · dismiss ×
             badges                      // status · kind · re-alert pills (own row)
-            anomalyHighlight            // geeky: the numbers ("is this normal?")
-            plainSummary                // processed: plain "what this means"
+            anomalyHighlight            // the headline verdict ("is this normal?")
             groupedObservations        // one-line "also:" for a grouped insight
             discoveryRow                // "Sourced by Anomalous" / looking up / Look it up
             if confirmingAck { ackConfirm }  // the "Normal for me" teaching two-step
-            if expanded { identityDetail }   // deep detail on demand
-            if !judged.isResolved {
-                actionRow               // remediation verbs on their own row
-                    .padding(.top, 4)
+            // Progressive disclosure: the collapsed card is just the headline +
+            // status. The plain-English explanation, the identity/what-it-is,
+            // and the remediation buttons all live behind Details — keeps the
+            // stack short so many cards don't run off-screen.
+            if expanded {
+                plainSummary            // the "what this means" explanation
+                identityDetail          // what it is + suggested action (prose)
+                if !judged.isResolved {
+                    actionRow           // remediation verbs
+                        .padding(.top, 2)
+                }
             }
             if case .completed(let result) = judged.escalation {
                 expertResult(result)
