@@ -259,6 +259,7 @@ struct DiagnosisCardView: View {
             anomalyHighlight            // the headline verdict ("is this normal?")
             groupedObservations        // one-line "also:" for a grouped insight
             discoveryRow                // "Sourced by Anomalous" / looking up / Look it up
+            verifyRow                   // transient "Check again" feedback
             if confirmingAck { ackConfirm }  // the "Normal for me" teaching two-step
             // Progressive disclosure: the collapsed card is just the headline +
             // status. The plain-English explanation, the identity/what-it-is,
@@ -343,6 +344,31 @@ struct DiagnosisCardView: View {
         .accessibilityLabel(expanded ? "Hide details" : "Show details")
     }
 
+    /// Transient feedback while / after "Check again" (Verify) runs. On a clear,
+    /// the card resolves and disappears, so there's no lasting row for that case.
+    @ViewBuilder
+    private var verifyRow: some View {
+        switch judged.verifyStatus {
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Checking if it's still a problem…").font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.top, 2)
+        case .stillActive:
+            Label("Still running hot right now.", systemImage: "exclamationmark.circle")
+                .font(.caption).foregroundStyle(.orange)
+                .padding(.top, 2)
+        case .couldntCheck:
+            Label("Couldn't re-check just now — still keeping an eye on it.", systemImage: "questionmark.circle")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
+        case nil:
+            EmptyView()
+        }
+    }
+
     /// The per-card overflow menu (bottom-right): the "manage this card"
     /// actions that don't warrant a always-visible button — mark normal for
     /// this Mac (the teaching two-step) and snooze.
@@ -350,6 +376,13 @@ struct DiagnosisCardView: View {
     private var cardMenu: some View {
         if let appState {
             Menu {
+                Button {
+                    Task { await appState.verify(judged) }
+                } label: {
+                    Label("Check again", systemImage: "arrow.clockwise")
+                }
+                .disabled(judged.verifyStatus == .checking)
+                Divider()
                 Button {
                     confirmingAck = true
                 } label: {
@@ -661,6 +694,11 @@ struct DiagnosisCardView: View {
                     Text("knowledge map only").font(.callout).foregroundStyle(.secondary)
                 }
             }
+            // How long this has been flagged (distinct from the metric window in
+            // the verdict) — helps judge staleness; "Check again" re-verifies it.
+            (Text("First flagged ") + Text(judged.anomaly.detectedAt, format: .relative(presentation: .named)))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
         .transition(.opacity.combined(with: .move(edge: .top)))
     }

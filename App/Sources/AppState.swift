@@ -63,6 +63,10 @@ final class AppState {
         /// way back (materially worse / new instance / snooze expired). The
         /// card and widget show it as icon + words, never color alone.
         var returnedWorse: String? = nil
+        /// Transient state while the user's "Check again" (Verify) runs — a
+        /// live re-check of the metric, so a card that's actually calmed down
+        /// can clear without waiting ~25–90 min for the window/median to decay.
+        var verifyStatus: VerifyStatus? = nil
 
         var isApp: Bool { anomaly.identity.bundleID != nil }
         /// The concrete action offered, gated by the card's safety tier.
@@ -75,6 +79,8 @@ final class AppState {
         var warrantsEscalation: Bool {
             !judgedByModel || card.actionSafetyTier >= 3
         }
+
+        enum VerifyStatus: Equatable { case checking, stillActive, couldntCheck }
     }
 
     enum EscalationState: Equatable {
@@ -1398,6 +1404,60 @@ final class AppState {
         publishWidgetStatus()
     }
 
+    /// User-initiated "Check again" (Verify): re-sample now and test the LIVE
+    /// instantaneous metric — NOT the slow window/median the rules key on. If the
+    /// process has calmed down (or exited), resolve the card immediately instead
+    /// of waiting the ~25–90 min it takes the window to decay. Exactly what you
+    /// want right after taking the recommended action.
+    func verify(_ judged: JudgedAnomaly) async {
+        setVerifyStatus(judged.id, .checking)
+        await tick()   // fresh sample of every process
+        guard anomalies.contains(where: { $0.id == judged.id }) else { return }
+        let hist = history[judged.anomaly.identity] ?? []
+        // A just-exited process has no fresh sample — its last reading is older
+        // than a cadence interval.
+        let gone = hist.last.map { Date.now.timeIntervalSince($0.timestamp) > baseInterval * 1.5 } ?? true
+        if gone {
+            resolveVerified(judged.id, reason: .ended)
+            return
+        }
+        switch DetectionRules.liveConditionActive(kind: judged.anomaly.kind, history: hist, thresholds: thresholds) {
+        case .some(false):
+            resolveVerified(judged.id, reason: .recovered)          // calmed down → clear now
+        case .some(true):
+            setVerifyStatus(judged.id, .stillActive); clearVerifyStatusSoon(judged.id)
+        case .none:
+            setVerifyStatus(judged.id, .couldntCheck); clearVerifyStatusSoon(judged.id)
+        }
+    }
+
+    private func setVerifyStatus(_ id: UUID, _ status: JudgedAnomaly.VerifyStatus?) {
+        if let i = anomalies.firstIndex(where: { $0.id == id }) { anomalies[i].verifyStatus = status }
+    }
+
+    private func clearVerifyStatusSoon(_ id: UUID) {
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            setVerifyStatus(id, nil)
+        }
+    }
+
+    /// Resolve a card via Verify — the same brief "resolved" fade + journal as
+    /// auto-resolution, then remove after the linger (independent of the next
+    /// tick, so it clears promptly).
+    private func resolveVerified(_ id: UUID, reason: AnomalyResolution) {
+        guard let i = anomalies.firstIndex(where: { $0.id == id }) else { return }
+        anomalies[i].verifyStatus = nil
+        anomalies[i].resolvedAt = .now
+        let judged = anomalies[i]
+        Task { await recordResolution(judged, reason: reason) }
+        Task {
+            try? await Task.sleep(for: .seconds(Self.resolvedLingerSeconds))
+            anomalies.removeAll { $0.id == id }
+        }
+        publishWidgetStatus()
+    }
+
     // MARK: - Acknowledgment (Phase 4: "normal for me" + snooze)
 
     /// The condition an acknowledgment covers: process lineage · kind ·
@@ -1707,11 +1767,16 @@ final class AppState {
 
     /// A plain-English statement of the observed deviation — the "so what,"
     /// with durations in human units (hours/days) and no internal rule names.
+    /// "3 hours" / "1 hour" / "2 days" — honours singular vs plural.
+    private static func plural(_ n: Int, _ unit: String) -> String {
+        "\(n) \(unit)\(n == 1 ? "" : "s")"
+    }
+
     private static func observation(for anomaly: Anomaly) -> String {
         let hours = anomaly.windowSeconds / 3600
         let duration: String
-        if hours >= 48 { duration = "for \(Int(hours / 24)) days" }
-        else if hours >= 1 { duration = "for \(Int(hours)) hours" }
+        if hours >= 48 { duration = "for \(plural(Int(hours / 24), "day"))" }
+        else if hours >= 1 { duration = "for \(plural(Int(hours), "hour"))" }
         else { duration = "for under an hour" }
         let current = anomaly.magnitudeCurve.last ?? 0
 
@@ -1726,7 +1791,7 @@ final class AppState {
             return "This process is new and unrecognized, and it's using significant resources."
         case .appHung:
             let secs = Int(anomaly.windowSeconds)
-            let howLong = secs < 90 ? "for about \(secs) seconds" : "for about \(secs / 60) minutes"
+            let howLong = secs < 90 ? "for about \(plural(secs, "second"))" : "for about \(plural(secs / 60, "minute"))"
             return "It has stopped responding to input — unresponsive \(howLong)."
         case .energyWakeups:
             return "It is waking the processor about \(Int(current)) times a second \(duration) — the busy-wait pattern that quietly drains the battery."

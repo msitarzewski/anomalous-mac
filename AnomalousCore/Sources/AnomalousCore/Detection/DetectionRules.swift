@@ -242,6 +242,51 @@ public enum DetectionRules {
         return percents.reduce(0, +) / Double(percents.count)
     }
 
+    /// Live Δ-per-second of a cumulative counter over the last tick — the
+    /// instantaneous analogue of the window rules, for the Verify/heal check.
+    static func instantaneousRate(_ history: [ProcessSample], _ counter: (ProcessSample) -> Double) -> Double? {
+        guard history.count >= 2 else { return nil }
+        let a = history[history.count - 2], b = history[history.count - 1]
+        let dt = b.timestamp.timeIntervalSince(a.timestamp)
+        let ca = counter(a), cb = counter(b)
+        guard dt > 0, cb >= ca, ca != 0 else { return nil }
+        return (cb - ca) / dt
+    }
+
+    /// Live per-process GPU share RIGHT NOW (Δ gpuTime over Δ wall), the Verify
+    /// analogue of `instantaneousCPUPercent`. nil when it can't be computed.
+    public static func instantaneousGPUPercent(history: [ProcessSample]) -> Double? {
+        instantaneousRate(history) { Double($0.gpuTimeMachAbs) * Collector.machTimebaseSecondsPerTick }
+            .map { $0 * 100 }
+    }
+
+    /// Is the acute condition STILL present RIGHT NOW? The Verify action's live
+    /// check — the instantaneous metric vs the active/floor threshold, NOT the
+    /// slow window/median the detection rules key on (which lags ~25–90 min, so
+    /// a card lingers long after the process actually calmed down). Returns nil
+    /// when it can't be judged from the retained history (treat as "keep
+    /// watching", don't force-clear).
+    public static func liveConditionActive(kind: Anomaly.Kind, history: [ProcessSample], thresholds: DetectionThresholds = .init()) -> Bool? {
+        switch kind {
+        case .sustainedCPU, .cpuTimeRatio:
+            return instantaneousCPUPercent(history: history).map { $0 >= thresholds.cpuTimeRatioActivePercent }
+        case .gpuSaturation:
+            return instantaneousGPUPercent(history: history).map { $0 >= thresholds.gpuFloorPercent }
+        case .rssCeiling:
+            return history.last.map { primaryMemoryBytes($0) >= thresholds.rssCeilingBytes }
+        case .memoryLeakFootprint, .rssLeak:
+            return history.last.map { primaryMemoryBytes($0) >= thresholds.footprintFloorBytes }
+        case .energyWakeups:
+            return instantaneousRate(history) { Double($0.interruptWakeups) }.map { $0 >= thresholds.wakeupsFloorPerSecond }
+        case .diskThrash:
+            return instantaneousRate(history) { Double($0.diskBytesRead &+ $0.diskBytesWritten) }.map { $0 >= thresholds.diskFloorBytesPerSecond }
+        case .networkThroughput:
+            return instantaneousRate(history) { Double($0.netBytesIn &+ $0.netBytesOut) }.map { $0 >= thresholds.networkFloorBytesPerSecond }
+        case .novelProcess, .appHung:
+            return nil   // no live metric — Verify can't instantly re-check these
+        }
+    }
+
     /// Rule 1: sustained CPU over a window. `history` must be time-ordered
     /// samples of ONE process identity spanning at least the window.
     /// `robust` (optional) annotates HOW abnormal the average is for this

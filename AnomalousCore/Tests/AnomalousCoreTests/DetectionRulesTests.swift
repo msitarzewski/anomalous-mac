@@ -26,6 +26,39 @@ private func samples(cpuPercent: Double, minutes: Int, rssMB: [Double]? = nil) -
     }
 }
 
+/// Build a history whose per-tick instantaneous CPU follows `perTickPercents`
+/// (60s spacing, cumulative cputime), for the live-verify checks.
+private func cpuHistory(_ perTickPercents: [Double]) -> [ProcessSample] {
+    let start = Date(timeIntervalSince1970: 1_750_000_000)
+    var cpu = 0.0
+    var out = [ProcessSample(identity: identity(), timestamp: start, cpuTimeSeconds: 0, residentBytes: 0, uptimeSeconds: 0)]
+    for (i, p) in perTickPercents.enumerated() {
+        cpu += p / 100 * 60
+        out.append(ProcessSample(identity: identity(), timestamp: start.addingTimeInterval(Double(i + 1) * 60),
+                                 cpuTimeSeconds: cpu, residentBytes: 0, uptimeSeconds: Double(i + 1) * 60))
+    }
+    return out
+}
+
+@Suite("live verify — is the acute condition still present RIGHT NOW?")
+struct LiveConditionTests {
+    @Test("sustained CPU heals once live CPU drops below the active bar (the lingering-card fix)")
+    func cpuHealed() {
+        // was hot, now idle across the recent ticks → the window average may
+        // still be high, but the live metric says it's over.
+        #expect(DetectionRules.liveConditionActive(kind: .sustainedCPU, history: cpuHistory([90, 5, 4, 3])) == false)
+    }
+    @Test("sustained CPU stays active while live CPU is still high")
+    func cpuHot() {
+        #expect(DetectionRules.liveConditionActive(kind: .sustainedCPU, history: cpuHistory([88, 91, 89, 90])) == true)
+    }
+    @Test("no live probe for novel process / hung app → nil (keep watching, don't force-clear)")
+    func noProbe() {
+        #expect(DetectionRules.liveConditionActive(kind: .novelProcess, history: []) == nil)
+        #expect(DetectionRules.liveConditionActive(kind: .appHung, history: []) == nil)
+    }
+}
+
 @Suite("cputime/uptime ratio — the rule that catches dasd on first launch")
 struct CPUTimeRatioTests {
     @Test("flags a pre-existing runaway: 25 CPU-hours over 41h of PROCESS uptime")
