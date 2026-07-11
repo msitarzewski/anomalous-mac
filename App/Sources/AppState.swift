@@ -67,6 +67,13 @@ final class AppState {
         /// live re-check of the metric, so a card that's actually calmed down
         /// can clear without waiting ~25–90 min for the window/median to decay.
         var verifyStatus: VerifyStatus? = nil
+        /// Journal-derived recurrence: this process+kind genuinely resolved
+        /// (recovered / exited / was handled) before and has now re-tripped as
+        /// a *fresh* detection. Drives the "First flagged … · returned N×"
+        /// footer so a flapping process reads as an ongoing saga, not a fresh
+        /// one-minute blip. Distinct from `returnedWorse` (the anti-mute marker
+        /// for an ACKNOWLEDGED/snoozed condition earning its way back).
+        var recurrence: RecurrenceSummary? = nil
 
         var isApp: Bool { anomaly.identity.bundleID != nil }
         /// The concrete action offered, gated by the card's safety tier.
@@ -934,8 +941,28 @@ final class AppState {
         }
     }
 
+    /// Look back over the local journal for prior *genuinely-resolved* episodes
+    /// of the same identity + kind — a process that recovered, exited, or was
+    /// handled and is now flagging again. Pure logic lives in
+    /// `RecurrenceFinder` (tested in AnomalousCore); this just feeds it the
+    /// live journal. Returns nil for a genuine first flag.
+    private func recurrenceInfo(for anomaly: Anomaly) -> RecurrenceSummary? {
+        RecurrenceFinder.summary(
+            kind: anomaly.kind.rawValue,
+            bundleID: anomaly.identity.bundleID,
+            processName: anomaly.identity.executableName,
+            detectedAt: anomaly.detectedAt,
+            in: journalEntries,
+            now: .now
+        )
+    }
+
     private func judge(_ anomaly: Anomaly, returnedWorse: String? = nil) async {
         guard let knowledgeMap else { return }
+        // A process that genuinely cleared and re-tripped: fold its saga into
+        // the footer. Skipped when the anti-mute marker already tells the
+        // "came back" story, so the two never double up.
+        let recurrence = returnedWorse == nil ? recurrenceInfo(for: anomaly) : nil
         let processKey = BaselineStore.key(for: anomaly.identity)
         // Channel-aware: a variant like dev.zed.Zed-Preview resolves to the base
         // app's record, so it is NOT treated as unknown (which would fire a
@@ -955,6 +982,7 @@ final class AppState {
         if let cached = await baselineStore.cachedDiagnosis(processKey: processKey, kind: anomaly.kind) {
             var judged = JudgedAnomaly(anomaly: anomaly, card: cached.card, judgedByModel: cached.judgedByModel, baselineSentence: baseline)
             judged.returnedWorse = returnedWorse
+            judged.recurrence = recurrence
             judged.genuinelyUnknown = Self.genuinelyUnknown(
                 anomaly: anomaly, hasCorpusEntry: hasCorpusEntry, judgedByModel: cached.judgedByModel
             )
@@ -1001,6 +1029,7 @@ final class AppState {
             print("[anomalous] CARD (map-only) \(anomaly.identity.executableName): \(card.whatItIs) → \(card.suggestedAction) [tier \(card.actionSafetyTier)]")
         }
         judged.returnedWorse = returnedWorse
+        judged.recurrence = recurrence
         judged.genuinelyUnknown = Self.genuinelyUnknown(
             anomaly: anomaly, hasCorpusEntry: hasCorpusEntry, judgedByModel: judged.judgedByModel
         )
@@ -1384,6 +1413,7 @@ final class AppState {
             }
             var judged = JudgedAnomaly(anomaly: anomaly, card: cached.card, judgedByModel: cached.judgedByModel, baselineSentence: baseline)
             judged.returnedWorse = returnedWorse
+            judged.recurrence = returnedWorse == nil ? recurrenceInfo(for: anomaly) : nil
             judged.genuinelyUnknown = Self.genuinelyUnknown(
                 anomaly: anomaly,
                 hasCorpusEntry: knowledgeMap?.entry(forProcessName: sample.identity.executableName) != nil,

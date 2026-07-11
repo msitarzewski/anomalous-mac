@@ -31,6 +31,69 @@ public enum AnomalyResolution: String, Codable, Sendable {
     }
 }
 
+/// Summary of a process+kind that genuinely resolved before and has now
+/// re-tripped. Drives the "First flagged … · returned N×" card footer so a
+/// flapping process reads as an ongoing saga rather than a fresh blip.
+public struct RecurrenceSummary: Equatable, Sendable {
+    /// The earliest detection across the recent episodes (this one + priors) —
+    /// the true start of the saga, not just this instance.
+    public let firstFlaggedAt: Date
+    /// How many prior resolved episodes there were (always >= 1).
+    public let returnCount: Int
+    /// Whether the saga began within the same calendar day as `now` — lets the
+    /// UI say "returned N× today" only when it's actually accurate.
+    public let scopedToToday: Bool
+
+    public init(firstFlaggedAt: Date, returnCount: Int, scopedToToday: Bool) {
+        self.firstFlaggedAt = firstFlaggedAt
+        self.returnCount = returnCount
+        self.scopedToToday = scopedToToday
+    }
+}
+
+/// Reads recurrence out of the local journal. Pure and deterministic (inject
+/// `now`/`calendar`) so it can be unit-tested without app state.
+public enum RecurrenceFinder {
+    /// Resolutions that mean the condition *genuinely went away* — so a fresh
+    /// detection afterward is a true recurrence. Excludes `.dismissed` (a
+    /// view-clear; the condition may have persisted) and `.acknowledged` /
+    /// `.snoozed` (the anti-mute re-alert marker owns those).
+    static let genuinelyResolved: Set<AnomalyResolution> = [.recovered, .ended, .actioned]
+
+    /// Prior genuinely-resolved episodes of the same identity + kind within
+    /// `window` before `now`. Identity matches on bundle id when the live
+    /// anomaly has one, else on process name (and only against other
+    /// bundle-less entries, so an app's helper never cross-matches the app).
+    /// Returns nil for a genuine first flag.
+    public static func summary(
+        kind: String,
+        bundleID: String?,
+        processName: String,
+        detectedAt: Date,
+        in entries: [JournalEntry],
+        now: Date,
+        window: TimeInterval = 24 * 3600,
+        calendar: Calendar = .current
+    ) -> RecurrenceSummary? {
+        let cutoff = now.addingTimeInterval(-window)
+        let priors = entries.filter { e in
+            guard e.kind == kind,
+                  genuinelyResolved.contains(e.resolution),
+                  e.resolvedAt >= cutoff
+            else { return false }
+            if let bundleID { return e.bundleID == bundleID }
+            return e.bundleID == nil && e.processName == processName
+        }
+        guard !priors.isEmpty else { return nil }
+        let firstFlagged = min(detectedAt, priors.map(\.detectedAt).min() ?? detectedAt)
+        return RecurrenceSummary(
+            firstFlaggedAt: firstFlagged,
+            returnCount: priors.count,
+            scopedToToday: calendar.isDate(firstFlagged, inSameDayAs: now)
+        )
+    }
+}
+
 /// A resolved anomaly, kept as reviewable history. The active list shows only
 /// live problems; when one clears — it recovers, the process exits, or the user
 /// handles it — it moves here so nothing silently vanishes.

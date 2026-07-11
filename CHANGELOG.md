@@ -52,7 +52,9 @@ is new since `0.1.3`.
   you accepted comes back materially worse, or misbehaves in a new way, you hear
   about it.
 - **Card auto‑resolve + Journal** — a cleared card shows a brief "resolved" state,
-  then files into a local incident history.
+  then files into a local incident history. A process that clears and re‑trips
+  now reads its true saga from that history — **"first flagged … · returned N×"**
+  — instead of resetting to a fresh one‑minute blip each time.
 
 ### Lives quietly in the OS
 - **Ambient desktop widget** — "All systems nominal" at rest, comes to life only

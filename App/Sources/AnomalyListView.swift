@@ -696,11 +696,28 @@ struct DiagnosisCardView: View {
             }
             // How long this has been flagged (distinct from the metric window in
             // the verdict) — helps judge staleness; "Check again" re-verifies it.
-            (Text("First flagged ") + Text(judged.anomaly.detectedAt, format: .relative(presentation: .named)))
+            // When the process resolved and came back, show the true start of the
+            // saga plus how many times it has returned, not just this episode.
+            firstFlaggedLine
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
         .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    /// "First flagged …", enriched to "First flagged … · returned N×" when the
+    /// journal shows this process+kind cleared and came back — so a flapping
+    /// process reads as an ongoing saga rather than a fresh one-minute blip.
+    @ViewBuilder private var firstFlaggedLine: some View {
+        if let rec = judged.recurrence {
+            Text("First flagged ")
+                + Text(rec.firstFlaggedAt, format: .relative(presentation: .named))
+                + Text(rec.scopedToToday ? " · returned \(rec.returnCount)× today"
+                                         : " · returned \(rec.returnCount)×")
+        } else {
+            Text("First flagged ")
+                + Text(judged.anomaly.detectedAt, format: .relative(presentation: .named))
+        }
     }
 
     /// The remediation verbs on their own row — smaller buttons now, the
