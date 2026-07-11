@@ -337,13 +337,16 @@ public enum DetectionRules {
     public static func chronicCPUAnomaly(
         robust: RobustStats?,
         sample: ProcessSample,
+        observedSpan: TimeInterval? = nil,
         thresholds: DetectionThresholds = .init()
     ) -> Anomaly? {
         guard let robust, robust.median >= thresholds.chronicCPUPercent else { return nil }
         return Anomaly(
             kind: .sustainedCPU,
             identity: sample.identity,
-            windowSeconds: thresholds.sustainedCPUWindow,
+            // The real span we've observed it hot for (the reservoir window),
+            // not a fixed nominal window — the card states an honest duration.
+            windowSeconds: observedSpan ?? thresholds.sustainedCPUWindow,
             magnitudeCurve: [robust.median],
             baselineValue: robust.median,
             detectedAt: sample.timestamp,

@@ -1223,6 +1223,7 @@ final class AppState {
             // sustained rule didn't already fire, so we never double-flag CPU.
             robust: judgment[.cpuPercent]?.stats,
             sample: sample,
+            observedSpan: hist.count >= 2 ? sample.timestamp.timeIntervalSince(hist.first!.timestamp) : nil,
             thresholds: thresholds
         ) {
             found.append(a)
@@ -1777,7 +1778,11 @@ final class AppState {
         let duration: String
         if hours >= 48 { duration = "for \(plural(Int(hours / 24), "day"))" }
         else if hours >= 1 { duration = "for \(plural(Int(hours), "hour"))" }
-        else { duration = "for under an hour" }
+        else {
+            // We know the exact window — say the minutes, not a vague "under an hour."
+            let mins = Int(anomaly.windowSeconds / 60)
+            duration = mins >= 1 ? "for \(plural(mins, "minute"))" : "for under a minute"
+        }
         let current = anomaly.magnitudeCurve.last ?? 0
 
         switch anomaly.kind {
