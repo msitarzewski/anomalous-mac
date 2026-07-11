@@ -24,6 +24,7 @@ struct SettingsView: View {
     @State private var showUnlock = false
     @State private var devPassword = ""
     @State private var unlockFailed = false
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         TabView(selection: $appState.settingsTab) {
@@ -204,6 +205,25 @@ struct SettingsView: View {
                 Text("Quiet, passive notices when a journal-worthy anomaly clears — they never make a sound or break Focus. Off by default: silence is the point.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Link("About notifications", destination: anomalousHelpURL("/help/notifications"))
+                    .font(.footnote)
+            }
+
+            Section("Anomaly history") {
+                Button("Open Anomaly History…") {
+                    openWindow(id: "history")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                Picker("Keep the last", selection: Binding(
+                    get: { appState.journalRetentionLimit },
+                    set: { appState.journalRetentionLimit = $0 }
+                )) {
+                    ForEach(AppState.journalRetentionOptions, id: \.value) { opt in
+                        Text(opt.label).tag(opt.value)
+                    }
+                }
+                Text("How many resolved incidents to keep in your local history. When the limit is reached, the oldest are dropped. This history never leaves your Mac.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Link("About anomaly history", destination: anomalousHelpURL("/help/history"))
                     .font(.footnote)
             }
         }

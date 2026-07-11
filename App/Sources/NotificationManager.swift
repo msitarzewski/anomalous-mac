@@ -53,19 +53,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     /// A short, plain-English label for the anomaly kind — for the notification
     /// subtitle, so a non-technical reader sees "GPU running hot," not the raw
     /// rule name "gpu.saturation."
-    private static func plainKind(_ kind: Anomaly.Kind) -> String {
-        switch kind {
-        case .sustainedCPU, .cpuTimeRatio: return "High CPU"
-        case .rssLeak, .memoryLeakFootprint: return "Memory climbing"
-        case .rssCeiling: return "Very high memory"
-        case .gpuSaturation: return "GPU running hot"
-        case .energyWakeups: return "Draining the battery"
-        case .diskThrash: return "Heavy disk activity"
-        case .networkThroughput: return "Heavy network use"
-        case .novelProcess: return "New, unrecognized process"
-        case .appHung: return "Not responding"
-        }
-    }
+    private static func plainKind(_ kind: Anomaly.Kind) -> String { kind.plainLabel }
 
     func post(for judged: AppState.JudgedAnomaly, conditionKey: String) async {
         await requestAuthorizationIfNeeded()

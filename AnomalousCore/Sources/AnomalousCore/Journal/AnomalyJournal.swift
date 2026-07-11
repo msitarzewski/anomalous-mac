@@ -1,7 +1,7 @@
 import Foundation
 
 /// How a surfaced anomaly left the active list.
-public enum AnomalyResolution: String, Codable, Sendable {
+public enum AnomalyResolution: String, Codable, Sendable, CaseIterable {
     case recovered     // the process returned to normal on its own
     case ended         // the process exited
     case dismissed     // the user dismissed the card
@@ -97,7 +97,7 @@ public enum RecurrenceFinder {
 /// A resolved anomaly, kept as reviewable history. The active list shows only
 /// live problems; when one clears — it recovers, the process exits, or the user
 /// handles it — it moves here so nothing silently vanishes.
-public struct JournalEntry: Codable, Sendable, Identifiable {
+public struct JournalEntry: Codable, Sendable, Identifiable, Equatable {
     public let id: UUID
     public let processName: String
     public let bundleID: String?
@@ -147,46 +147,106 @@ public actor AnomalyJournal {
     struct Snapshot: Codable {
         var schemaVersion = 1
         var entries: [JournalEntry] = []
+
+        init() {}
+
+        enum CodingKeys: String, CodingKey { case schemaVersion, entries }
+
+        // Lenient decode: a single corrupt entry must NOT nuke the whole
+        // history. `journal.json` is user-writable and a crash can truncate it
+        // mid-write, so decode entries element-by-element and drop only the bad
+        // ones. (The all-or-nothing default would silently erase everything,
+        // then persist the emptiness on the next save.)
+        init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            schemaVersion = (try? c.decode(Int.self, forKey: .schemaVersion)) ?? 1
+            let lossy = (try? c.decode([LossyEntry].self, forKey: .entries)) ?? []
+            entries = lossy.compactMap(\.value)
+        }
     }
 
-    /// Keep the journal bounded to the most recent incidents.
-    public static let maxEntries = 500
+    /// Decodes to a `JournalEntry` or, if that entry is malformed, to nil —
+    /// consuming exactly one array slot either way so iteration never stalls.
+    private struct LossyEntry: Decodable {
+        let value: JournalEntry?
+        init(from decoder: any Decoder) throws { value = try? JournalEntry(from: decoder) }
+    }
+
+    /// Refuse to load a `journal.json` far larger than any real history — a
+    /// crash-corrupted or hostile local file shouldn't be able to OOM us at
+    /// launch. 128 MB is ~400k entries; well beyond even an "Unlimited" journal.
+    static let maxLoadableBytes = 128 * 1024 * 1024
+
+    /// Default retention when the user hasn't chosen one. The cap is
+    /// user-configurable (History window depth setting); this is the fallback.
+    public static let defaultMaxEntries = 1000
 
     private let fileURL: URL
     private var snapshot = Snapshot()
     private var loaded = false
+    /// How many incidents to retain. Configurable at runtime via `setMaxEntries`
+    /// so the History window's depth control can raise or lower it live.
+    private var maxEntries: Int
 
-    public init(fileURL: URL) {
+    public init(fileURL: URL, maxEntries: Int = AnomalyJournal.defaultMaxEntries) {
         self.fileURL = fileURL
+        self.maxEntries = max(1, maxEntries)
+    }
+
+    /// Change retention depth. Trims immediately if the new cap is smaller so
+    /// the on-disk history matches the user's choice right away.
+    public func setMaxEntries(_ newValue: Int) {
+        maxEntries = max(1, newValue)
+        if snapshot.entries.count > maxEntries {
+            snapshot.entries.removeLast(snapshot.entries.count - maxEntries)
+            save()
+        }
     }
 
     public func loadIfNeeded() {
         guard !loaded else { return }
         loaded = true
+        // Bound the read: skip an absurdly large (corrupt/hostile) file.
+        if let size = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+           size > Self.maxLoadableBytes {
+            return
+        }
         guard let data = try? Data(contentsOf: fileURL),
               let stored = try? JSONDecoder().decode(Snapshot.self, from: data)
         else { return }
         snapshot = stored
+        // Enforce the retention cap on load too — the file may have been written
+        // by a build with a larger cap, or the user may have lowered it.
+        if snapshot.entries.count > maxEntries {
+            snapshot.entries = Array(snapshot.entries.prefix(maxEntries))
+        }
     }
 
     public func save() {
         try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(snapshot) {
             try? data.write(to: fileURL, options: .atomic)
+            // Owner-only: the journal is private incident history. Same-user
+            // processes can still read it, but nothing else should.
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
         }
     }
 
     /// Record a resolution (newest first), bounded to `maxEntries`.
     public func record(_ entry: JournalEntry) {
         snapshot.entries.insert(entry, at: 0)
-        if snapshot.entries.count > Self.maxEntries {
-            snapshot.entries.removeLast(snapshot.entries.count - Self.maxEntries)
+        if snapshot.entries.count > maxEntries {
+            snapshot.entries.removeLast(snapshot.entries.count - maxEntries)
         }
         save()
     }
 
-    public func recent(_ limit: Int = 200) -> [JournalEntry] {
-        Array(snapshot.entries.prefix(limit))
+    /// Recent entries, newest first. With no limit, returns the full retained
+    /// history (up to the configured cap) so the History window and dashboard
+    /// honour the user's depth choice — 5k / 25k / Unlimited included, not just
+    /// the first 1,000.
+    public func recent(_ limit: Int? = nil) -> [JournalEntry] {
+        Array(snapshot.entries.prefix(limit ?? maxEntries))
     }
 
     public func clear() {

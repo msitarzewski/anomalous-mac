@@ -136,6 +136,25 @@ final class AppState {
         set { UserDefaults.standard.set(newValue, forKey: "discoveryEnabled") }
     }
 
+    /// How many resolved incidents the local journal retains — the History
+    /// window's "depth" control. `Int.max` == Unlimited. Default 1000. Read
+    /// statically at journal-init (a stored property can't touch `self`);
+    /// setting it re-caps the live journal and refreshes the loaded entries.
+    static var storedJournalRetention: Int {
+        UserDefaults.standard.object(forKey: "journalRetentionLimit") as? Int ?? AnomalyJournal.defaultMaxEntries
+    }
+    /// The depth choices offered in Settings, label → cap (`Int.max` = Unlimited).
+    static let journalRetentionOptions: [(label: String, value: Int)] = [
+        ("250", 250), ("1,000", 1000), ("5,000", 5000), ("25,000", 25_000), ("Unlimited", Int.max)
+    ]
+    var journalRetentionLimit: Int {
+        get { Self.storedJournalRetention }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "journalRetentionLimit")
+            Task { await journal.setMaxEntries(newValue); journalEntries = await journal.recent() }
+        }
+    }
+
     /// True while the popover is showing. Discovery polling stops when it
     /// closes (the result still lands in the corpus server-side for next time).
     var popoverIsOpen = true
@@ -395,9 +414,11 @@ final class AppState {
         fileURL: URL.applicationSupportDirectory.appending(path: "Anomalous/baselines.json")
     )
     /// Reviewable history of resolved anomalies (local only). A card that
-    /// clears on its own moves here instead of silently vanishing.
+    /// clears on its own moves here instead of silently vanishing. Retention
+    /// depth is user-configurable (History window); defaults to 1000.
     private let journal = AnomalyJournal(
-        fileURL: URL.applicationSupportDirectory.appending(path: "Anomalous/journal.json")
+        fileURL: URL.applicationSupportDirectory.appending(path: "Anomalous/journal.json"),
+        maxEntries: AppState.storedJournalRetention
     )
     /// Phase 4: "normal for me" envelopes + snoozes, per condition
     /// (`process lineage · kind · dimension`). Local-only, same persistence
@@ -1341,6 +1362,20 @@ final class AppState {
             magnitudeCurve: [seconds],
             detectedAt: .now
         )
+    }
+
+    /// Reload the published journal list from disk — called when the History
+    /// window opens so it reflects incidents resolved since the last tick.
+    func refreshJournal() async {
+        await journal.loadIfNeeded()
+        journalEntries = await journal.recent()
+    }
+
+    /// Erase the local incident history (a user privacy control in the History
+    /// window). Local only; nothing to un-send.
+    func clearJournal() async {
+        await journal.clear()
+        journalEntries = []
     }
 
     /// Move a cleared anomaly into the local journal (newest first) and refresh

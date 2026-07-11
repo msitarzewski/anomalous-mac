@@ -35,17 +35,11 @@ struct AnomalousApp: App {
         .windowResizability(.contentSize)
         .defaultPosition(.center)
 
-        Window("History", id: "history") {
-            TabView {
-                JournalView(appState: appState)
-                    .tabItem { Label("Journal", systemImage: "list.bullet.clipboard") }
-                HistoryView(directory: appState.sendLogDirectory)
-                    .tabItem { Label("Sent", systemImage: "paperplane") }
-            }
-            .frame(minWidth: 480, minHeight: 380)
-            .padding(.top, 4)
+        Window("Anomaly History", id: "history") {
+            HistoryWindow(appState: appState)
         }
         .windowResizability(.contentMinSize)
+        .defaultSize(width: 660, height: 560)
     }
 }
 

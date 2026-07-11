@@ -34,6 +34,22 @@ public struct Anomaly: Sendable, Equatable {
         /// Sustained per-process network throughput far above the lineage's
         /// baseline (NetworkStatistics per-flow counters, folded per pid).
         case networkThroughput = "network.throughput"
+
+        /// Plain, non-technical label for a person — the same wording used in
+        /// notifications and on the history dashboard, so every surface agrees.
+        public var plainLabel: String {
+            switch self {
+            case .sustainedCPU, .cpuTimeRatio: return "High CPU"
+            case .rssLeak, .memoryLeakFootprint: return "Memory climbing"
+            case .rssCeiling: return "Very high memory"
+            case .gpuSaturation: return "GPU running hot"
+            case .energyWakeups: return "Draining the battery"
+            case .diskThrash: return "Heavy disk activity"
+            case .networkThroughput: return "Heavy network use"
+            case .novelProcess: return "New, unrecognized process"
+            case .appHung: return "Not responding"
+            }
+        }
     }
 
     public let kind: Kind

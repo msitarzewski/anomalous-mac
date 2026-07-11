@@ -56,6 +56,19 @@ is new since `0.1.3`.
   now reads its true saga from that history — **"first flagged … · returned N×"**
   — instead of resetting to a fresh one‑minute blip each time.
 
+### Review what it's caught
+- **Anomaly History window** (menu‑bar gear → *Anomaly History…*, or Settings) —
+  a private, on‑device review of everything Anomalous has caught. **Overview**
+  is a dashboard: how many incidents, what types happen most, how they resolved
+  (most clear on their own), a trend over time, and your most‑flagged processes —
+  over a **Day / Week / Month / Unlimited** range. **By Process** drills into any
+  one process: a chart of its incidents over time and a timeline of every episode,
+  so you can see whether something keeps misbehaving or whether a fix held.
+- **You control the depth and the data** — keep the last 250 / 1,000 / 5,000 /
+  25,000 / Unlimited incidents (default 1,000), **Export** the whole history to a
+  CSV you choose, or **Clear** it. It never leaves your Mac; clearing the logbook
+  doesn't touch detection or your learned baselines.
+
 ### Lives quietly in the OS
 - **Ambient desktop widget** — "All systems nominal" at rest, comes to life only
   on a confirmed anomaly, with Snooze / Normal‑for‑me right in the tile.
