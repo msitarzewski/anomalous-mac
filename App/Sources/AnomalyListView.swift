@@ -24,6 +24,8 @@ struct AnomalyListView: View {
     @Bindable var appState: AppState
     let updater: UpdaterController
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismiss) private var dismiss
     @State private var measuredCardsHeight: CGFloat = 0
 
     /// Cap for the scrollable card stack — the whole popover must fit the
@@ -39,8 +41,8 @@ struct AnomalyListView: View {
             if appState.anomalies.isEmpty {
                 allClear
             } else {
-                header
-                    .padding(.bottom, 10)
+                // No header/count — the cards ARE the content. The sample status
+                // ("N processes · time") lives quietly in the footer instead.
                 // The card stack sizes to its content (a MenuBarExtra window
                 // sizes to intrinsic content — a bare ScrollView collapses to
                 // zero here and clips the cards). Anomalies are rare by design,
@@ -50,7 +52,7 @@ struct AnomalyListView: View {
                     ForEach(appState.anomalies) { judged in
                         DiagnosisCardView(judged: judged, onDismiss: {
                             appState.dismiss(judged)
-                        }, appState: appState, showGetHelp: appState.anomalies.count > 1)
+                        }, appState: appState, showGetHelp: true)
                     }
                 }
                 // Measure the natural stack height and cap it: frame =
@@ -69,9 +71,8 @@ struct AnomalyListView: View {
             }
 
             helperBanner
-            Divider()
-                .padding(.vertical, 10)
             footer
+                .padding(.top, 10)
         }
         .padding(16)
         .animation(.snappy(duration: 0.25), value: appState.anomalies.count)
@@ -163,35 +164,24 @@ struct AnomalyListView: View {
         .padding(.vertical, 30)
     }
 
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(appState.anomalies.count == 1 ? "1 anomaly" : "\(appState.anomalies.count) anomalies")
-                .font(.headline)
-            Spacer()
-            if let at = appState.lastSampleAt {
-                Text("\(appState.sampledProcessCount) processes · \(at.formatted(date: .omitted, time: .shortened))")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
     /// Housekeeping lives behind the gear, menu-like per the HIG panel
     /// exception. All preferences (contribution, unknown-process lookup, the
     /// helper, notifications) live in Settings — the popover is only ever the
     /// diagnoses, so it stays quiet and uncluttered.
     private var footer: some View {
         HStack {
-            // Single anomaly: hoist its Get Help into the popover footer's open
-            // space (bottom-left, opposite the gear). Multiple anomalies keep
-            // Get Help per-card, so this stays empty and the gear sits alone.
-            if appState.anomalies.count == 1, let only = appState.anomalies.first, !only.isResolved {
-                GetHelpControl(judged: only, appState: appState)
+            // The quiet "state of things" — how many processes were checked and
+            // when — sits bottom-left, opposite the gear. Replaces the old header.
+            if let at = appState.lastSampleAt {
+                Text("\(appState.sampledProcessCount) processes · \(at.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             Menu {
                     Button("Check for Updates…") {
                         updater.checkForUpdates()
+                        dismiss()
                     }
                     .disabled(!updater.canCheckForUpdates)
                     Divider()
@@ -209,13 +199,21 @@ struct AnomalyListView: View {
                                 .first { $0.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" }?
                                 .makeKeyAndOrderFront(nil)
                         }
+                        dismiss()
                     }
                     .keyboardShortcut(",")
+                    Button("Anomaly History…") {
+                        openWindow(id: "history")
+                        NSApp.activate(ignoringOtherApps: true)
+                        dismiss()
+                    }
                     Button("View Send Log") {
                         NSWorkspace.shared.activateFileViewerSelecting([appState.sendLogDirectory])
+                        dismiss()
                     }
                     Button("Help & Documentation") {
                         NSWorkspace.shared.open(anomalousHelpURL("/help"))
+                        dismiss()
                     }
                     Divider()
                     Button("Quit Anomalous") {
@@ -276,8 +274,6 @@ struct DiagnosisCardView: View {
             if case .completed(let result) = judged.escalation {
                 expertResult(result)
             }
-            footer                      // Get Help CTA · Details toggle · ⋯ card menu
-                .padding(.top, 4)
         }
         .padding(14)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
@@ -309,24 +305,8 @@ struct DiagnosisCardView: View {
         }
     }
 
-    /// The card footer: the status/kind pills and (multi-card) Get Help CTA on
-    /// the left, the disclosure + per-card menu on the right. Consolidates the
-    /// metadata and controls onto one bottom row so the title area stays clean.
-    private var footer: some View {
-        HStack(spacing: 8) {
-            if showGetHelp, !judged.isResolved, let appState {
-                GetHelpControl(judged: judged, appState: appState)
-            }
-            badges                      // kind · re-alert pills, after Get Help
-            Spacer(minLength: 8)
-            detailsToggle
-            if !judged.isResolved, appState != nil { cardMenu }
-        }
-    }
-
-    /// "Details ⌄" — the disclosure, now a plain bottom toggle (replaces the
-    /// old right-edge chevron rail so the title row owns the full width). The
-    /// whole card is still tappable to expand.
+    /// "Details ⌄" — the disclosure toggle, revealed on hover in the title row
+    /// so a resting card stays clean. The whole card is still tappable to expand.
     private var detailsToggle: some View {
         Button {
             withAnimation(.snappy(duration: 0.28)) { expanded.toggle() }
@@ -452,13 +432,20 @@ struct DiagnosisCardView: View {
         HStack(alignment: .center, spacing: 7) {
             tierIcon
             Text(judged.anomaly.identity.executableName)
-                .font(.headline)
+                .font(.body.weight(.medium))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .help(judged.anomaly.identity.executableName)
+            // Controls reveal on hover so a resting card is just tier · name ·
+            // verdict — a clean, scannable list. Details, ⋯ and × live here now.
+            if isHovering, !judged.isResolved {
+                detailsToggle
+                if appState != nil { cardMenu }
+            }
             trailingControl
         }
+        .animation(.easeInOut(duration: 0.15), value: isHovering)
     }
 
     /// The safety tier as an icon in front of the name — a glanceable status
@@ -515,7 +502,7 @@ struct DiagnosisCardView: View {
             Button { onDismiss() } label: {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(.secondary)
-                    .opacity(isHovering ? 1 : 0.6)
+                    .opacity(isHovering ? 1 : 0)   // hover-only; still in the a11y tree
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
@@ -554,8 +541,10 @@ struct DiagnosisCardView: View {
     /// "this is fine," the opposite of the truth. The tier describes the
     /// ACTION's safety, so it lives with the action (see tierIndicator).
     private var anomalyHighlight: some View {
+        // Regular weight, primary colour: it stays the focal line (vs. the
+        // secondary explanation) without the whole card shouting in bold.
         Text(judged.card.isThisNormal.sentenceCased)
-            .font(.body.weight(.semibold))
+            .font(.body)
             .foregroundStyle(.primary)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -726,12 +715,18 @@ struct DiagnosisCardView: View {
     /// so this row is purely "act on the process."
     private var actionRow: some View {
         HStack(alignment: .center, spacing: 8) {
+            // Get Help leads the action list — the magic-icon escalation, before
+            // the concrete remediation verbs.
+            if showGetHelp, let appState {
+                GetHelpControl(judged: judged, appState: appState)
+            }
             if let sudoCommand {
                 sudoFallback(sudoCommand)
             } else {
                 primaryActions
             }
             Spacer(minLength: 0)
+            badges              // kind · re-alert pills, to the right of the actions
         }
     }
 
@@ -744,7 +739,10 @@ struct DiagnosisCardView: View {
     }
     private var tierSymbol: String {
         switch judged.card.actionSafetyTier {
-        case 1: return "checkmark.circle.fill"
+        // A SHIELD, not a checkmark: "verified safe to act," not "done." The
+        // bare checkmark.circle collided with the Resolved badge and read as
+        // "nothing wrong" on a live anomaly.
+        case 1: return "checkmark.shield.fill"
         case 2: return "exclamationmark.triangle.fill"
         default: return "info.circle.fill"
         }
@@ -776,14 +774,14 @@ struct DiagnosisCardView: View {
         } else if let appState, let service = brewService {
             if confirmingBrew {
                 Button("Stop", role: .destructive) { brew("stop", service, appState) }
-                    .controlSize(.small).buttonStyle(.borderedProminent)
-                Button("Cancel") { confirmingBrew = false }.controlSize(.small)
+                    .controlSize(.small).buttonStyle(.glassProminent)
+                Button("Cancel") { confirmingBrew = false }.controlSize(.small).buttonStyle(.glass)
             } else {
                 // Restart is the recommended (reversible) remedy — make it the
                 // active button; Stop stays a default secondary.
                 Button("Restart") { brew("restart", service, appState) }
-                    .controlSize(.small).buttonStyle(.borderedProminent)
-                Button("Stop") { confirmingBrew = true }.controlSize(.small)
+                    .controlSize(.small).buttonStyle(.glassProminent)
+                Button("Stop") { confirmingBrew = true }.controlSize(.small).buttonStyle(.glass)
             }
         } else {
             processActions
@@ -798,14 +796,14 @@ struct DiagnosisCardView: View {
                 // Commit step: the destructive verb turns red (role); Force Quit
                 // and Cancel are default secondaries beside it.
                 Button(action.verb, role: .destructive) { run(action, appState, force: false) }
-                    .controlSize(.small).buttonStyle(.borderedProminent)
+                    .controlSize(.small).buttonStyle(.glassProminent)
                 if action == .terminate {
                     // Force Quit is SIGKILL — no chance to save. Gate it behind
                     // its own explicit confirmation, above the graceful Quit.
                     Button("Force Quit", role: .destructive) { confirmingForceQuit = true }
-                        .controlSize(.small)
+                        .controlSize(.small).buttonStyle(.glass)
                 }
-                Button("Cancel") { confirming = false }.controlSize(.small)
+                Button("Cancel") { confirming = false }.controlSize(.small).buttonStyle(.glass)
             } else {
                 // Resting state: the recommended verb is the active (prominent)
                 // button. It's accent-colored, not red — the red commit only
@@ -814,7 +812,7 @@ struct DiagnosisCardView: View {
                     if action.isDestructive { confirming = true } else { run(action, appState, force: false) }
                 }
                 .controlSize(.small)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
             }
         }
     }
@@ -900,15 +898,18 @@ struct GetHelpControl: View {
         if appState.canEscalate {
             switch judged.escalation {
             case .idle:
-                // The CTA: an expert answer is a tap away. Prominent + a soft
-                // accent glow so it reads as the invited next step.
+                // The CTA: an expert answer is a tap away. A compact green
+                // magic-icon button leading the action row, with a soft glow so
+                // it reads as the invited next step. The tooltip explains what
+                // happens (people won't tap an unlabelled icon blindly).
                 Button { Task { await appState.escalate(judged) } } label: {
-                    Label("Get Help", systemImage: "sparkles")
+                    Label("Get Help", systemImage: "sparkles").labelStyle(.iconOnly)
                 }
                 .controlSize(.small)
-                .buttonStyle(.borderedProminent)
-                .shadow(color: .accentColor.opacity(0.55), radius: 7)
-                .help("Send this diagnosis for an expert answer with cited sources.")
+                .buttonStyle(.glassProminent)
+                .tint(.green)
+                .shadow(color: .green.opacity(0.55), radius: 6)
+                .help("Get Help — send this diagnosis to Anomalous for an expert answer. Frontier AI researches the process and replies with cited sources you can verify. Costs a few cents from your prepaid balance; you're only charged if it finds a real answer.")
             case .sending:
                 HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Sending…").font(.callout).foregroundStyle(.secondary) }
             case .sent(let id):
@@ -932,7 +933,7 @@ struct GetHelpControl: View {
                     Label("Add credit", systemImage: "creditcard")
                 }
                 .controlSize(.small)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .tint(.orange)
                 .help("Opens Account, where you can top up your prepaid balance. Then tap Get Help again.")
             case .failed(let message):
