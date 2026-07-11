@@ -30,8 +30,8 @@ struct EscalationPayloadTests {
         #expect(!raw.contains("--"))   // no command-line flags
     }
 
-    @Test("metric_curves is never empty — EVERY anomaly kind maps to a curve, or the server 422s the whole request")
-    func metricCurvesNeverEmpty() throws {
+    @Test("metric_curves: non-empty AND every value is an array — the server's rules (required + metric_curves.* => array) 422 otherwise")
+    func metricCurvesValid() throws {
         for kind in Anomaly.Kind.allCases {
             let a = Anomaly(
                 kind: kind,
@@ -42,7 +42,13 @@ struct EscalationPayloadTests {
             let obj = try JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as! [String: Any]
             let curves = obj["metric_curves"] as? [String: Any]
             #expect(curves != nil && !(curves!.isEmpty),
-                    "metric_curves empty for kind \(kind.rawValue) — this 422s at the server's required rule and breaks Get Help")
+                    "metric_curves empty for kind \(kind.rawValue) — this 422s at the server's `required` rule and breaks Get Help")
+            // Every value MUST be an array: the server validates `metric_curves.* => array`,
+            // so a scalar (e.g. a bare baseline number) 422s the whole request.
+            for (key, value) in curves ?? [:] {
+                #expect(value is [Any],
+                        "metric_curves.\(key) is a scalar for kind \(kind.rawValue) — the server requires arrays; this 422s Get Help")
+            }
         }
     }
 

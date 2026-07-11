@@ -26,12 +26,12 @@ struct SettingsView: View {
     @State private var unlockFailed = false
 
     var body: some View {
-        TabView {
-            general.tabItem { Label("General", systemImage: "gearshape") }
-            account.tabItem { Label("Account", systemImage: "person.crop.circle") }
-            privacy.tabItem { Label("Privacy", systemImage: "hand.raised") }
-            transparency.tabItem { Label("Transparency", systemImage: "eye") }
-            about.tabItem { Label("About", systemImage: "info.circle") }
+        TabView(selection: $appState.settingsTab) {
+            general.tabItem { Label("General", systemImage: "gearshape") }.tag(AppState.SettingsTab.general)
+            account.tabItem { Label("Account", systemImage: "person.crop.circle") }.tag(AppState.SettingsTab.account)
+            privacy.tabItem { Label("Privacy", systemImage: "hand.raised") }.tag(AppState.SettingsTab.privacy)
+            transparency.tabItem { Label("Transparency", systemImage: "eye") }.tag(AppState.SettingsTab.transparency)
+            about.tabItem { Label("About", systemImage: "info.circle") }.tag(AppState.SettingsTab.about)
         }
         // One frame is shared across all tabs, so size it to the TALLEST —
         // Transparency, with its full "what we sample" list — so no tab

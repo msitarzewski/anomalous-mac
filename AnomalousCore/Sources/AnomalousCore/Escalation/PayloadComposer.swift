@@ -46,8 +46,11 @@ public struct PayloadComposer: Sendable {
         /// an empty object — an empty object fails the server's `required` rule
         /// and 422s the whole request (the GPU/wakeups/disk-anomaly bug).
         public let drivingCurve: [Double]?
-        public let baselineCPUPercent: Double?
-        public let baselineRSSMB: Double?
+        // NOTE: metric_curves holds CURVES ONLY (arrays of numbers) — the
+        // server validates `metric_curves.* => array`. Scalar baselines used to
+        // live here and 422'd every sustained-CPU/leak payload ("must be an
+        // array"); they're redundant with the baseline stated in `summary`, so
+        // they were removed rather than reshaped.
 
         enum CodingKeys: String, CodingKey {
             case cpuPercent = "cpu_percent"
@@ -56,8 +59,6 @@ public struct PayloadComposer: Sendable {
             case wakeupsPerSecond = "wakeups_per_second"
             case diskBytesPerSecond = "disk_bytes_per_second"
             case drivingCurve = "driving_metric_curve"
-            case baselineCPUPercent = "baseline_cpu_percent"
-            case baselineRSSMB = "baseline_rss_mb"
         }
     }
 
@@ -110,9 +111,7 @@ public struct PayloadComposer: Sendable {
             gpuPercent: gpu,
             wakeupsPerSecond: wakeups,
             diskBytesPerSecond: disk,
-            drivingCurve: driving,
-            baselineCPUPercent: anomaly.kind == .sustainedCPU ? anomaly.baselineValue : nil,
-            baselineRSSMB: anomaly.kind == .rssLeak || anomaly.kind == .memoryLeakFootprint ? anomaly.baselineValue : nil
+            drivingCurve: driving
         )
     }
 

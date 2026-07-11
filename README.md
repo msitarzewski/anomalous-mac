@@ -35,7 +35,9 @@ useful entirely on its own, offline, with no account.
   signal), **per-process GPU** utilization & memory, **per-process network**
   throughput, and **Neural-Engine** memory — plus system context (memory
   pressure, swap, thermal state, load). Most of it is read from calls the OS was
-  already making; the whole sweep costs **< 0.05% CPU**.
+  already making. Including the per-process baseline math and detection, the
+  full sweep measures **~0.4% CPU on a busy Mac** — and **0% between checks**
+  (the work is a short burst every 60–90s, not a continuous poll).
 - **Detects** with statistically honest, per-process baselines — robust
   **median/MAD** (a plain average hides the very spike you're hunting), **seasonal**
   hour-of-day / weekday baselines (*a nightly backup is not an anomaly*), and
@@ -70,10 +72,10 @@ useful entirely on its own, offline, with no account.
 Anomalous is built to be a first-class macOS 26/27 citizen that you forget is
 running until the one moment it matters:
 
-- **Ambient desktop widget** — a calm "all nominal" glyph that *comes to life*
-  only on a confirmed anomaly, with **Snooze** / **Normal for me** right in the
-  tile. No live gauges ticking; it earns your attention only when it has
-  something true to say.
+- **Ambient desktop widget** — a calm "all systems nominal" glyph (matching the
+  menu-bar popover) that *comes to life* only on a confirmed anomaly, with
+  **Snooze** / **Normal for me** right in the tile. No live gauges ticking; it
+  earns your attention only when it has something true to say.
 - **Ask Siri / Spotlight** — *"Is my Mac behaving normally?"* Built on App
   Intents, so the same actions appear in Shortcuts, Spotlight, and a Control
   Center toggle.
@@ -81,9 +83,10 @@ running until the one moment it matters:
   high-confidence anomaly posts **Time Sensitive** to break through Focus, with
   Investigate / Snooze / Normal-for-me inline. A burst collapses into one
   grouped alert. It will not nag you.
-- **Energy-aware** — the sampler backs off (longer interval, lighter probes)
-  under thermal pressure or Low Power Mode, so the thing watching your battery
-  never becomes the thing draining it.
+- **Energy-aware** — the base cadence adapts to power (≈60s plugged in, ≈90s on
+  battery) and backs off further (×3 interval, lighter probes) under thermal
+  pressure or Low Power Mode, so the thing watching your battery never becomes
+  the thing draining it.
 - **Radically transparent** — a *"what we sample & why"* panel in plain language,
   a visible local-processing badge, and an **auditable no-egress** posture you
   can verify in this source, not just take on faith.
@@ -124,7 +127,7 @@ degrade cleanly to knowledge-corpus-only answers.
 ## Architecture
 
 ```
-Collector (always on, <0.05% CPU)         System signals
+Collector (bursty every 60–90s)           System signals
   libproc · rusage_v6 · IOKit/AGX GPU       pressure · swap · thermal · load
   · NetworkStatistics · IOHID/IOReport
         │                                          │

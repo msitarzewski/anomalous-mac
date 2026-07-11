@@ -3,6 +3,7 @@ import Observation
 import AppKit
 import WidgetKit
 import AnomalousCore
+import IOKit.ps
 
 /// The app's single source of state: drives the collector loop, keeps
 /// per-process history, runs detection each tick, and judges anomalies.
@@ -77,8 +78,15 @@ final class AppState {
     }
 
     enum EscalationState: Equatable {
-        case idle, sending, sent(Int), completed(EscalationClient.ExpertResult), failed(String)
+        /// `needsCredit` is distinct from `failed`: the fix isn't "retry", it's
+        /// "top up" — so the card offers Add credit (→ Account), not Retry.
+        case idle, sending, sent(Int), completed(EscalationClient.ExpertResult), needsCredit, failed(String)
     }
+
+    /// Which Settings tab to show — lets a card deep-link (e.g. "Add credit" →
+    /// Account). Bound to the Settings `TabView` selection.
+    enum SettingsTab: Hashable { case general, account, privacy, transparency, about }
+    var settingsTab: SettingsTab = .general
 
     /// Result of attempting an action, surfaced transiently in the card.
     enum ActionResult: Equatable { case done, needsSudo(String), gone, identityChanged, failed }
@@ -490,13 +498,41 @@ final class AppState {
     /// when thermal state ≥ serious or Low Power Mode is on — the model-
     /// citizen behavior macOS 27's background-activity transparency surfaces.
     private var activity: NSBackgroundActivityScheduler?
-    private var baseInterval: TimeInterval = 90
+    /// Base cadence ADAPTS to the power source — faster when there's wall power
+    /// to spend (the full tick measures ~0.4% CPU), gentler on battery — with a
+    /// ×3 thermal / Low-Power backoff on top.
+    private static let acInterval: TimeInterval = 60       // plugged in
+    private static let batteryInterval: TimeInterval = 90  // on battery
     private static let intervalTolerance: TimeInterval = 30
     private static let backoffMultiplier: TimeInterval = 3
+    /// The interval last handed to the scheduler — so a thermal/power/plug
+    /// change only reschedules when the effective cadence actually moves.
+    private var scheduledInterval: TimeInterval = 0
     /// True while thermally/power constrained (read by tick to skip the
     /// helper XPC round-trip — the most expensive probe).
     private(set) var backoffActive = false
     private var observersRegistered = false
+    /// Kept alive so IOKit keeps delivering AC⇄battery change callbacks.
+    private var powerSourceSource: CFRunLoopSource?
+
+    /// Power-source-adaptive base interval, before backoff. Desktops (no
+    /// battery) and unknown states read as AC — there's nothing to protect.
+    var baseInterval: TimeInterval {
+        Self.onACPower() ? Self.acInterval : Self.batteryInterval
+    }
+    /// The cadence handed to the scheduler: base × backoff.
+    private var effectiveInterval: TimeInterval {
+        backoffActive ? baseInterval * Self.backoffMultiplier : baseInterval
+    }
+
+    /// Whether the Mac is on wall power. Desktops (no battery) and unknown
+    /// states read as AC — the faster cadence, nothing to conserve.
+    private static func onACPower() -> Bool {
+        guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let type = IOPSGetProvidingPowerSourceType(snapshot)?.takeUnretainedValue()
+        else { return true }
+        return (type as String) == kIOPSACPowerValue
+    }
 
     /// Monitoring on/off — the Control Center toggle's backing state. Lives
     /// in the App Group defaults so the control can render current state
@@ -505,17 +541,16 @@ final class AppState {
         get { Self.groupDefaults?.object(forKey: "monitoringEnabled") as? Bool ?? true }
         set {
             Self.groupDefaults?.set(newValue, forKey: "monitoringEnabled")
-            if newValue { startMonitoring(interval: baseInterval) } else { stopMonitoring() }
+            if newValue { startMonitoring() } else { stopMonitoring() }
             publishWidgetStatus()
         }
     }
     static let groupDefaults = UserDefaults(suiteName: SensorStatus.appGroupID)
 
-    func startMonitoring(interval: TimeInterval = 90) {
-        baseInterval = interval
+    func startMonitoring() {
         guard activity == nil, monitoringEnabled else { return }
         registerObserversIfNeeded()
-        updateBackoff()
+        refreshBackoffFlag()
         // Immediate first tick on launch — the scheduler's first fire can be
         // minutes out; "first check in progress" must not be.
         Task { [weak self] in await self?.tick() }
@@ -529,9 +564,10 @@ final class AppState {
 
     private func scheduleActivity() {
         activity?.invalidate()
+        scheduledInterval = effectiveInterval
         let scheduler = NSBackgroundActivityScheduler(identifier: "bot.anomalous.sensor.tick")
         scheduler.repeats = true
-        scheduler.interval = backoffActive ? baseInterval * Self.backoffMultiplier : baseInterval
+        scheduler.interval = scheduledInterval
         scheduler.tolerance = Self.intervalTolerance
         scheduler.qualityOfService = .utility
         scheduler.schedule { [weak self] completion in
@@ -557,29 +593,45 @@ final class AppState {
         ) { [weak self] _ in
             Task { @MainActor in self?.helper.refreshOnActivate() }
         }
-        // Thermal / power-state changes re-evaluate the backoff and reschedule.
+        // Thermal state and Low Power Mode → re-evaluate cadence + backoff.
         NotificationCenter.default.addObserver(
             forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.updateBackoff() }
+            Task { @MainActor in self?.reevaluateCadence() }
         }
         NotificationCenter.default.addObserver(
             forName: Notification.Name.NSProcessInfoPowerStateDidChange, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.updateBackoff() }
+            Task { @MainActor in self?.reevaluateCadence() }
+        }
+        // AC⇄battery plug changes ride a separate IOKit run-loop source — the
+        // notifications above fire only for Low Power Mode, not for plugging in.
+        let ctx = Unmanaged.passUnretained(self).toOpaque()
+        if let source = IOPSNotificationCreateRunLoopSource({ raw in
+            guard let raw else { return }
+            Task { @MainActor in Unmanaged<AppState>.fromOpaque(raw).takeUnretainedValue().reevaluateCadence() }
+        }, ctx)?.takeRetainedValue() {
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
+            powerSourceSource = source
         }
     }
 
-    /// Stretch the interval ×3 and drop the helper probe while the machine is
-    /// hot or on Low Power Mode; restore when the pressure clears.
-    private func updateBackoff() {
+    /// Recompute whether we're thermally / Low-Power constrained (the tick
+    /// reads `backoffActive` to skip the helper probe). Pure — no reschedule.
+    private func refreshBackoffFlag() {
         let info = ProcessInfo.processInfo
-        let constrained = info.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
+        backoffActive = info.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
             || info.isLowPowerModeEnabled
-        guard constrained != backoffActive else { return }
-        backoffActive = constrained
-        print("[anomalous] backoff \(constrained ? "ON (thermal/low-power) — interval ×3, helper probe skipped" : "off — normal cadence restored")")
-        if activity != nil { scheduleActivity() }
+    }
+
+    /// React to a thermal / Low-Power / AC⇄battery change: recompute the
+    /// effective cadence and reschedule ONLY if it actually moved (AC⇄battery =
+    /// 60⇄90s; thermal/Low-Power = ×3 on top). Cheap when nothing changed.
+    private func reevaluateCadence() {
+        refreshBackoffFlag()
+        guard activity != nil, effectiveInterval != scheduledInterval else { return }
+        print("[anomalous] cadence → \(Int(effectiveInterval))s (base \(Int(baseInterval))s\(backoffActive ? ", thermal/low-power ×3" : ""))")
+        scheduleActivity()
     }
 
     /// One immediate scan — the RunScanIntent / Control Center button path.
@@ -595,11 +647,12 @@ final class AppState {
         guard !ticking else { return }
         ticking = true
         defer { ticking = false }
-        // Re-evaluate backoff every tick, not only on system notifications: a
-        // thermal cool-down (or Low Power Mode toggle) whose notification the
-        // app missed would otherwise leave backoff stuck ON — skipping the
-        // helper probe forever and making system-wide monitoring look off.
-        updateBackoff()
+        // Re-evaluate cadence + backoff every tick, not only on system
+        // notifications: a thermal cool-down, Low Power Mode toggle, or AC⇄
+        // battery change whose notification the app missed would otherwise
+        // leave the wrong cadence (or backoff stuck ON, skipping the helper
+        // probe forever and making system-wide monitoring look off).
+        reevaluateCadence()
         await baselineStore.loadIfNeeded()
         await ackStore.loadIfNeeded()
         if !journalLoaded {
@@ -1637,6 +1690,9 @@ final class AppState {
             let result = try await client.awaitResult(id: accepted.id)
             setEscalation(.completed(result), for: judged)
             print("[anomalous] triage #\(accepted.id) result: \(result.suggestedAction ?? result.note ?? "—")")
+        } catch EscalationClient.EscalationError.insufficientBalance {
+            // Not a retryable failure — the fix is to add credit.
+            setEscalation(.needsCredit, for: judged)
         } catch {
             setEscalation(.failed(Self.escalationMessage(error)), for: judged)
             print("[anomalous] escalation failed: \(error)")
@@ -1693,7 +1749,7 @@ final class AppState {
     private static func escalationMessage(_ error: Error) -> String {
         switch error {
         case EscalationClient.EscalationError.unauthorized: return "Sign in again"
-        case EscalationClient.EscalationError.insufficientBalance: return "Add credit to escalate"
+        // .insufficientBalance is handled as its own .needsCredit state (Add credit), not a retryable failure.
         case EscalationClient.EscalationError.timedOut: return "Still working — try again in a moment"
         case EscalationClient.EscalationError.server: return "The service hit a snag — try again"
         default: return "Couldn't reach the service"

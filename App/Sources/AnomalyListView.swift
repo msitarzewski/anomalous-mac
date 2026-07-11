@@ -838,6 +838,7 @@ struct DiagnosisCardView: View {
 struct GetHelpControl: View {
     let judged: AppState.JudgedAnomaly
     let appState: AppState
+    @Environment(\.openSettings) private var openSettings
 
     @ViewBuilder
     var body: some View {
@@ -859,6 +860,26 @@ struct GetHelpControl: View {
                 HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Diagnosing · #\(id)").font(.caption).foregroundStyle(.secondary) }
             case .completed:
                 Label("Expert answer ready", systemImage: "checkmark.seal").font(.caption).foregroundStyle(.green)
+            case .needsCredit:
+                // Not an error to retry — you're out of prepaid balance. Route
+                // to the actual credit view (Settings → Account) rather than
+                // offering a "Retry" that would just fail again.
+                Button {
+                    appState.settingsTab = .account
+                    openSettings()
+                    NSApp.activate(ignoringOtherApps: true)
+                    DispatchQueue.main.async {
+                        NSApp.windows
+                            .first { $0.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" }?
+                            .makeKeyAndOrderFront(nil)
+                    }
+                } label: {
+                    Label("Add credit", systemImage: "creditcard")
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+                .help("Opens Account, where you can top up your prepaid balance. Then tap Get Help again.")
             case .failed(let message):
                 InlineRetryError(message: message) { Task { await appState.escalate(judged) } }
             }
