@@ -383,6 +383,7 @@ public actor BaselineStore {
 
     public func cacheExpertResult(_ result: EscalationClient.ExpertResult, processKey: String, kind: Anomaly.Kind) {
         snapshot.expertResults[Self.diagnosisKey(processKey, kind)] = result
+        save()   // a paid answer is worth persisting NOW, not on the next tick
     }
 
     public var flaggedCount: Int { snapshot.flagged.count }

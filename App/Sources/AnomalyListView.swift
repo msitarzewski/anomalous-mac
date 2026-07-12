@@ -256,13 +256,13 @@ struct DiagnosisCardView: View {
             titleRow                    // process name (full width) · dismiss ×
             anomalyHighlight            // the headline verdict ("is this normal?")
             groupedObservations        // one-line "also:" for a grouped insight
-            discoveryRow                // "Sourced by Anomalous" / looking up / Look it up
             verifyRow                   // transient "Check again" feedback
             if confirmingAck { ackConfirm }  // the "Normal for me" teaching two-step
             // Progressive disclosure: the collapsed card is just the headline +
             // status. The plain-English explanation, the identity/what-it-is,
-            // and the remediation buttons all live behind Details — keeps the
-            // stack short so many cards don't run off-screen.
+            // the remediation buttons, the expert answer, and all source links
+            // live behind Details — keeps the stack short so many cards don't
+            // run off-screen.
             if expanded {
                 plainSummary            // the "what this means" explanation
                 identityDetail          // what it is + suggested action (prose)
@@ -270,9 +270,12 @@ struct DiagnosisCardView: View {
                     actionRow           // remediation verbs
                         .padding(.top, 2)
                 }
-            }
-            if case .completed(let result) = judged.escalation {
-                expertResult(result)
+                // The paid expert answer (a ✨ on the title marks it), then ALL
+                // source links together at the bottom — never in two places.
+                if case .completed(let result) = judged.escalation {
+                    expertResult(result)
+                }
+                discoveryRow            // "Sourced by Anomalous" + its links, last
             }
         }
         .padding(14)
@@ -545,12 +548,24 @@ struct DiagnosisCardView: View {
     /// "this is fine," the opposite of the truth. The tier describes the
     /// ACTION's safety, so it lives with the action (see tierIndicator).
     private var anomalyHighlight: some View {
-        // Regular weight, primary colour: it stays the focal line (vs. the
-        // secondary explanation) without the whole card shouting in bold.
-        Text(judged.card.isThisNormal.sentenceCased)
-            .font(.body)
-            .foregroundStyle(.primary)
-            .fixedSize(horizontal: false, vertical: true)
+        // A ✨ leads the verdict when a paid expert answer is ready — the
+        // signal that there's an opinion to read (it lives under Details).
+        // Regular weight, primary colour: the verdict stays the focal line (vs.
+        // the secondary explanation) without the whole card shouting in bold.
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            if case .completed = judged.escalation {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(.green)
+                    .imageScale(.small)
+                    .help("Expert answer ready — open Details to read it.")
+                    .accessibilityLabel("Expert answer ready")
+            }
+            Text(judged.card.isThisNormal.sentenceCased)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     /// The processed, plain-English "what this means" — for a potentially
@@ -919,7 +934,10 @@ struct GetHelpControl: View {
             case .sent(let id):
                 HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Diagnosing · #\(id)").font(.caption).foregroundStyle(.secondary) }
             case .completed:
-                Label("Expert answer ready", systemImage: "checkmark.seal").font(.caption).foregroundStyle(.green)
+                // Nothing here — the ✨ on the verdict and the Expert diagnosis
+                // section below already say the answer's ready; a label here just
+                // crowds the action row.
+                EmptyView()
             case .needsCredit:
                 // Not an error to retry — you're out of prepaid balance. Route
                 // to the actual credit view (Settings → Account) rather than
