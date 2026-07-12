@@ -136,6 +136,17 @@ final class AppState {
         set { UserDefaults.standard.set(newValue, forKey: "discoveryEnabled") }
     }
 
+    /// One-time confirmation of the lookup SERVICE. Discovery is on by default
+    /// (as the onboarding shows), but before the very first automatic lookup we
+    /// pause and remind the user — a process name is about to leave the Mac — and
+    /// let them confirm. Once confirmed, unknown processes look up automatically;
+    /// the per-card "Look it up" escape hatch (toggle OFF) is unaffected. Default
+    /// false so the reminder always precedes the first send.
+    var discoveryConfirmed: Bool {
+        get { UserDefaults.standard.bool(forKey: "discoveryConfirmed") }
+        set { UserDefaults.standard.set(newValue, forKey: "discoveryConfirmed") }
+    }
+
     /// How many resolved incidents the local journal retains — the History
     /// window's "depth" control. `Int.max` == Unlimited. Default 1000. Read
     /// statically at journal-init (a stored property can't touch `self`);
@@ -970,15 +981,20 @@ final class AppState {
         }
     }
 
-    /// Whether a card warrants a discovery lookup: no corpus identity, and the
-    /// on-device model had no bundle to anchor on (or wasn't available). Pure —
-    /// reuses the engine's routing gate so app and engine never disagree.
+    /// Whether a card warrants a discovery lookup. The CORPUS — not the on-device
+    /// model — is the identity authority, so any process the corpus doesn't
+    /// recognize gets researched (local corpus miss → server corpus → web), even
+    /// when the model produced a card. A bundle-anchored model answer for an
+    /// UNRECOGNIZED bundle is just the bundle id paraphrased ("a background helper
+    /// linked to com.parallels.vm") — a 🤷, not an identification. The model's
+    /// card shows immediately; discovery swaps in the real identity when it lands.
+    /// Pure — reuses the engine's routing gate so app and engine never disagree.
     static func genuinelyUnknown(anomaly: Anomaly, hasCorpusEntry: Bool, judgedByModel: Bool) -> Bool {
         guard !hasCorpusEntry else { return false }
         switch JudgmentEngine.route(for: anomaly, hasCorpusEntry: false) {
-        case .thermal, .hungApp: return false
+        case .thermal, .hungApp: return false        // deterministic, not an identity question
         case .deterministicUnknown: return true      // no bundle — a mystery
-        case .model: return !judgedByModel           // bundle app the model couldn't identify / no model
+        case .model: return true                     // no corpus entry — research the real identity
         }
     }
 
@@ -1129,11 +1145,23 @@ final class AppState {
     private var discoveryByLineage: [String: DiscoveryRecord] = [:]
     private static let discoveryTTL: TimeInterval = 6 * 60 * 60   // don't re-ask for 6h
 
-    /// Auto-fire discovery for a genuinely-unknown card when the toggle is ON.
+    /// Auto-fire discovery for a genuinely-unknown card when the toggle is ON —
+    /// AND the user has confirmed the lookup service once (see discoveryConfirmed).
+    /// Until then the card shows a one-time reminder instead of sending anything.
     /// Known/thermal/hung cards never qualify. No-op otherwise.
     private func maybeDiscover(_ judged: JudgedAnomaly) {
-        guard judged.genuinelyUnknown, discoveryEnabled else { return }
+        guard judged.genuinelyUnknown, discoveryEnabled, discoveryConfirmed else { return }
         fireDiscovery(judged)
+    }
+
+    /// The user confirmed the lookup service from the first-fire reminder. Record
+    /// it so lookups now happen automatically, and start discovery for every
+    /// unknown card currently on screen (not just the one they clicked).
+    func confirmDiscoveryService() {
+        discoveryConfirmed = true
+        for judged in anomalies where judged.genuinelyUnknown {
+            fireDiscovery(judged)
+        }
     }
 
     /// Per-card on-demand lookup — the toggle-OFF escape hatch. The tap itself
@@ -1251,12 +1279,22 @@ final class AppState {
     /// added it to the shared corpus, which grounds it properly next feed).
     private func applyDiscovery(_ assessment: DiscoveryClient.Assessment, id: UUID, baseline: String, anomaly: Anomaly) {
         guard let i = anomalies.firstIndex(where: { $0.id == id }) else { return }
-        let card = assessment.card(baselineSentence: baseline)
+        let researched = assessment.card(baselineSentence: baseline)
         // A verified corpus answer is "Sourced by Anomalous"; a confident but
         // unverified research answer is shown with an honest caveat.
         let resolved: DiscoveryState = assessment.isUnverifiedResearch
             ? .researched(confidence: assessment.confidence)
             : .sourced
+        // IDENTITY ONLY: take WHAT-IT-IS from research, and KEEP everything else
+        // from the existing card. Notably we do NOT take whyItsProbablyHot: it
+        // maps from the corpus `when_hot_implies`, which the researcher writes as
+        // "what it means + what to DO" — so remediation ("try quitting Slack…")
+        // rides in on it. The deterministic whyItsProbablyHot is grounded in the
+        // observed numbers, with no external, unverified advice. So a research
+        // miss can never put wrong guidance on a card.
+        var card = anomalies[i].card
+        card.whatItIs = researched.whatItIs
+        card.confidenceNote = researched.confidenceNote
         anomalies[i].card = card
         anomalies[i].discovery = resolved
         anomalies[i].discoverySources = assessment.sources
@@ -1881,11 +1919,30 @@ final class AppState {
             processKey: BaselineStore.key(for: judged.anomaly.identity),
             kind: judged.anomaly.kind
         )
+        // The answer is keyed by CONDITION (processKey|kind), not pid — so every
+        // sibling instance of the same program + kind on screen right now gets it
+        // at once (two hot CGPDFService helpers both go "magic"), instead of
+        // waiting for each to be re-judged on the next tick.
+        propagateExpertResult(result, from: judged)
         print("[anomalous] triage #\(id) result: \(result.suggestedAction ?? result.note ?? "—")")
     }
 
     private func escalationClient() -> EscalationClient {
         EscalationClient(baseURL: serverBaseURL, bearerToken: accountToken, sendLog: SendLog(directory: sendLogDirectory))
+    }
+
+    /// Apply a just-earned expert answer to every OTHER live anomaly that shares
+    /// this one's condition (same processKey + kind) — the paid answer isn't
+    /// pid-specific, so all instances of the program show it immediately.
+    private func propagateExpertResult(_ result: EscalationClient.ExpertResult, from judged: JudgedAnomaly) {
+        let key = BaselineStore.key(for: judged.anomaly.identity)
+        let kind = judged.anomaly.kind
+        for i in anomalies.indices where anomalies[i].id != judged.id {
+            guard BaselineStore.key(for: anomalies[i].anomaly.identity) == key,
+                  anomalies[i].anomaly.kind == kind else { continue }
+            if case .completed = anomalies[i].escalation { continue }
+            anomalies[i].escalation = .completed(result)
+        }
     }
 
     private func setEscalation(_ state: EscalationState, for judged: JudgedAnomaly) {

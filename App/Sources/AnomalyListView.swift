@@ -48,11 +48,24 @@ struct AnomalyListView: View {
                 // zero here and clips the cards). Anomalies are rare by design,
                 // so render them naturally; only scroll once the list would
                 // exceed a sane height.
+                // Same program can run as several processes at once (macOS spawns
+                // one CGPDFService XPC helper per PDF client, etc.). Rather than
+                // repeat near-identical cards, group a program's instances into
+                // one disclosure card: collapsed it's a clean summary (no pid
+                // clutter); expanded it reveals each instance as its own full
+                // card, pid-tagged there where you actually need to tell them
+                // apart. A program with a single instance renders as one card.
+                let rows = Self.rows(appState.anomalies)
                 let cards = VStack(spacing: 8) {
-                    ForEach(appState.anomalies) { judged in
-                        DiagnosisCardView(judged: judged, onDismiss: {
-                            appState.dismiss(judged)
-                        }, appState: appState, showGetHelp: true)
+                    ForEach(rows) { row in
+                        switch row.content {
+                        case .single(let judged):
+                            DiagnosisCardView(judged: judged, onDismiss: {
+                                appState.dismiss(judged)
+                            }, appState: appState, showGetHelp: true)
+                        case .group(let members):
+                            GroupedAnomalyCard(instances: members, appState: appState)
+                        }
                     }
                 }
                 // Measure the natural stack height and cap it: frame =
@@ -230,6 +243,56 @@ struct AnomalyListView: View {
             .accessibilityLabel("Menu: settings, send log, quit")
         }
     }
+
+    /// A row in the popover: a standalone card, or a group of a program's
+    /// concurrently-active instances.
+    struct Row: Identifiable {
+        let id: String
+        let content: Content
+        enum Content {
+            case single(AppState.JudgedAnomaly)
+            case group([AppState.JudgedAnomaly])
+        }
+    }
+
+    /// Program identity independent of the specific process instance: same
+    /// executable + bundle is "the same program", even across pids/launches.
+    static func programKey(_ judged: AppState.JudgedAnomaly) -> String {
+        let id = judged.anomaly.identity
+        return "\(id.executableName)\u{0}\(id.bundleID ?? "")"
+    }
+
+    /// Fold the (severity-ordered) anomalies into ordered rows: a program with
+    /// 2+ ACTIVE instances becomes one group; everything else is a single card.
+    ///
+    /// Grouping is over ACTIVE (unresolved) instances only, so the instant one of
+    /// a pair resolves, the other shows by itself and the count is right — no
+    /// waiting out the 6s resolved-linger with a stale "(2)". A resolved instance
+    /// whose program is STILL active elsewhere is dropped (its live sibling
+    /// already represents the program; the faded duplicate would just flicker);
+    /// a genuinely solo resolved card still fades in place.
+    static func rows(_ anomalies: [AppState.JudgedAnomaly]) -> [Row] {
+        var activeByKey: [String: [AppState.JudgedAnomaly]] = [:]
+        for a in anomalies where !a.isResolved { activeByKey[programKey(a), default: []].append(a) }
+        let activeKeys = Set(activeByKey.keys)
+
+        var rows: [Row] = []
+        var emitted = Set<String>()
+        for a in anomalies {
+            let key = programKey(a)
+            if a.isResolved {
+                if activeKeys.contains(key) { continue }
+                rows.append(Row(id: "s-\(a.anomaly.identity.pid)", content: .single(a)))
+            } else if let members = activeByKey[key], members.count >= 2 {
+                if emitted.insert(key).inserted {
+                    rows.append(Row(id: "g-\(key)", content: .group(members)))
+                }
+            } else {
+                rows.append(Row(id: "s-\(a.anomaly.identity.pid)", content: .single(a)))
+            }
+        }
+        return rows
+    }
 }
 
 struct DiagnosisCardView: View {
@@ -240,6 +303,14 @@ struct DiagnosisCardView: View {
     /// (its "perfect space"), so the card suppresses its own copy. With multiple
     /// anomalies a global button can't target one card, so each keeps its own.
     var showGetHelp: Bool = true
+    /// Inside a GroupedAnomalyCard the program name is already in the group
+    /// header, so a member titles itself with this short ordinal ("Process 1")
+    /// instead of repeating the name; the real name + pid move to the tooltip.
+    var instanceLabel: String? = nil
+    /// Rendered inside a GroupedAnomalyCard: drop this card's own material so it
+    /// sits on the group's shared background, and defer the verdict/insight to
+    /// Details so a member collapses to a single row.
+    var embedded: Bool = false
     @State private var isHovering = false
     @State private var confirming = false
     @State private var confirmingAck = false
@@ -250,12 +321,41 @@ struct DiagnosisCardView: View {
     @State private var confirmingForceQuit = false
     @State private var expanded = false
     @State private var showingTierInfo = false
+    @Environment(\.openURL) private var openURL
+    @Environment(\.dismiss) private var dismiss
+
+    /// A source link as a BUTTON, not a `Link`: the card's tap-to-expand
+    /// `.onTapGesture` steals taps from a `Link` (but not from a Button/Control),
+    /// so a plain `Link` here reads as unclickable. openURL does the same job.
+    ///
+    /// It also DISMISSES the popover on click (like "Help & Documentation"): the
+    /// menu-bar window floats at a high level, so a handler that shows its own UI
+    /// — a browser picker like Choosy, or just the browser — appears BEHIND the
+    /// panel and can't be reached. Getting out of the way fixes every such
+    /// handoff, not just this link.
+    @ViewBuilder
+    private func sourceLink(_ url: String, _ note: String, font: Font) -> some View {
+        Button {
+            openURL(URL(string: url) ?? URL(string: "https://anomalous.bot")!)
+            dismiss()
+        } label: {
+            Label(note, systemImage: "link").font(font)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.blue)
+        .fixedSize(horizontal: false, vertical: true)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             titleRow                    // process name (full width) · dismiss ×
-            anomalyHighlight            // the headline verdict ("is this normal?")
-            groupedObservations        // one-line "also:" for a grouped insight
+            // A group member collapses to just its title row — the shared verdict
+            // is already in the group header — and reveals its own verdict/insight
+            // only when expanded. A standalone card shows them up front as before.
+            if !embedded {
+                anomalyHighlight        // the headline verdict ("is this normal?")
+                groupedObservations    // one-line "also:" for a grouped insight
+            }
             verifyRow                   // transient "Check again" feedback
             if confirmingAck { ackConfirm }  // the "Normal for me" teaching two-step
             // Progressive disclosure: the collapsed card is just the headline +
@@ -264,6 +364,10 @@ struct DiagnosisCardView: View {
             // live behind Details — keeps the stack short so many cards don't
             // run off-screen.
             if expanded {
+                if embedded {
+                    anomalyHighlight    // this member's own verdict, revealed here
+                    groupedObservations
+                }
                 plainSummary            // the "what this means" explanation
                 identityDetail          // what it is + suggested action (prose)
                 if !judged.isResolved {
@@ -282,8 +386,13 @@ struct DiagnosisCardView: View {
         // A frosted MATERIAL, not a faint tint: it blurs whatever's behind the
         // translucent popover (a saturated wallpaper otherwise bleeds through and
         // washes out the secondary text) and turns fully opaque under Reduce
-        // Transparency. Legibility over any desktop.
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        // Transparency. Legibility over any desktop. Suppressed when embedded —
+        // the group tray owns the surface, so members don't double-material.
+        .background {
+            if !embedded {
+                RoundedRectangle(cornerRadius: 10).fill(.regularMaterial)
+            }
+        }
         .opacity(judged.isResolved ? 0.55 : 1)          // fading out as it resolves
         .animation(.easeOut(duration: 0.3), value: judged.isResolved)
         .contentShape(Rectangle())
@@ -438,12 +547,24 @@ struct DiagnosisCardView: View {
     private var titleRow: some View {
         HStack(alignment: .center, spacing: 7) {
             tierIcon
-            Text(judged.anomaly.identity.executableName)
-                .font(.body.weight(.medium))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help(judged.anomaly.identity.executableName)
+            HStack(spacing: 5) {
+                titleText
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(titleHelp)
+                // A member collapses its verdict (which carries the ✨) behind
+                // Details, so surface the "expert answer ready" ✨ on the row.
+                if embedded, case .completed = judged.escalation {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(.green)
+                        .imageScale(.small)
+                        .help("Expert answer ready — open Details to read it.")
+                        .accessibilityLabel("Expert answer ready")
+                        .layoutPriority(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             // Controls reveal on hover so a resting card is just tier · name ·
             // verdict — a clean, scannable list. Details, ⋯ and × live here now.
             if isHovering, !judged.isResolved {
@@ -453,6 +574,23 @@ struct DiagnosisCardView: View {
             trailingControl
         }
         .animation(.easeInOut(duration: 0.15), value: isHovering)
+    }
+
+    /// The process name, plus a quiet trailing `pid NNNNN` only when a sibling
+    /// card shares this program (see `disambiguate`). Concatenated Text so it
+    /// stays one truncating line; the pid run keeps its own secondary styling.
+    private var titleText: Text {
+        // A group member titles itself "Process N" (the name is in the header);
+        // a standalone card uses the executable name.
+        Text(instanceLabel ?? judged.anomaly.identity.executableName)
+    }
+
+    /// Plain-String help (not a LocalizedStringKey so the pid isn't grouped). A
+    /// member's tooltip carries the real name + pid it stands in for.
+    private var titleHelp: String {
+        instanceLabel != nil
+            ? "\(judged.anomaly.identity.executableName) · pid \(judged.anomaly.identity.pid)"
+            : judged.anomaly.identity.executableName
     }
 
     /// The safety tier as an icon in front of the name — a glanceable status
@@ -627,10 +765,7 @@ struct DiagnosisCardView: View {
                     .foregroundStyle(.blue)
                     .accessibilityLabel("This answer was sourced by Anomalous")
                 ForEach(judged.discoverySources, id: \.url) { src in
-                    Link(destination: URL(string: src.url) ?? URL(string: "https://anomalous.bot")!) {
-                        Label(src.note, systemImage: "link").font(.caption)
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
+                    sourceLink(src.url, src.note, font: .caption)
                 }
             }
             .padding(.top, 2)
@@ -641,10 +776,7 @@ struct DiagnosisCardView: View {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Research answer, not yet independently verified")
                 ForEach(judged.discoverySources, id: \.url) { src in
-                    Link(destination: URL(string: src.url) ?? URL(string: "https://anomalous.bot")!) {
-                        Label(src.note, systemImage: "link").font(.caption)
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
+                    sourceLink(src.url, src.note, font: .caption)
                 }
             }
             .padding(.top, 2)
@@ -659,19 +791,60 @@ struct DiagnosisCardView: View {
                     .padding(.top, 2)
             }
         case .none:
-            // Per-card on-demand lookup for a genuinely-unknown card when the
-            // global toggle is OFF — a single-process consent (also logged).
-            if judged.genuinelyUnknown, let appState, !appState.discoveryEnabled, !judged.isResolved {
+            if judged.genuinelyUnknown, let appState, !judged.isResolved {
+                if !appState.discoveryEnabled {
+                    // Toggle OFF — per-card manual lookup (a single-process consent).
+                    Button {
+                        appState.lookUp(judged)
+                    } label: {
+                        Label("Look it up", systemImage: "magnifyingglass")
+                    }
+                    .controlSize(.small)
+                    .padding(.top, 2)
+                    .help("Send just this process's name (no paths, no personal data) to Anomalous to look up what it is. Logged in your send log.")
+                } else if !appState.discoveryConfirmed {
+                    // Toggle ON, but the FIRST automatic lookup — remind the user a
+                    // name is about to leave the Mac and let them confirm the service.
+                    discoveryConsentPrompt(appState)
+                }
+            }
+        }
+    }
+
+    /// One-time reminder before the first automatic lookup: discovery is on (the
+    /// onboarding default), but a process name is about to leave the Mac, so give
+    /// the user a beat to confirm the service — or turn it off and keep manual
+    /// per-card lookups. Shown once; after "Look it up" the flag is set and
+    /// unknown processes look up automatically.
+    @ViewBuilder
+    private func discoveryConsentPrompt(_ appState: AppState) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label {
+                Text("Anomalous doesn’t recognize this. Looking up unknown processes is on — it can send just the name (no paths, no personal data) to identify it, and every lookup is in your send log.")
+            } icon: {
+                Image(systemName: "magnifyingglass.circle")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
                 Button {
-                    appState.lookUp(judged)
+                    appState.confirmDiscoveryService()
                 } label: {
                     Label("Look it up", systemImage: "magnifyingglass")
                 }
                 .controlSize(.small)
-                .padding(.top, 2)
-                .help("Send just this process's name (no paths, no personal data) to Anomalous to look up what it is. Logged in your send log.")
+                .help("Confirm the lookup service. Unknown processes will be identified automatically from now on; change this any time in Settings.")
+                Button("Turn off") {
+                    appState.discoveryEnabled = false
+                }
+                .controlSize(.small)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Turn off automatic lookups. You can still look up individual processes with the per-card button.")
             }
         }
+        .padding(.top, 2)
     }
 
     /// Disclosure: the geeky/deep detail — full identity, the recommended
@@ -749,23 +922,8 @@ struct DiagnosisCardView: View {
         }
     }
 
-    private var tierTint: Color {
-        switch judged.card.actionSafetyTier {
-        case 1: return .green
-        case 2: return .orange
-        default: return .secondary
-        }
-    }
-    private var tierSymbol: String {
-        switch judged.card.actionSafetyTier {
-        // A SHIELD, not a checkmark: "verified safe to act," not "done." The
-        // bare checkmark.circle collided with the Resolved badge and read as
-        // "nothing wrong" on a live anomaly.
-        case 1: return "checkmark.shield.fill"
-        case 2: return "exclamationmark.triangle.fill"
-        default: return "info.circle.fill"
-        }
-    }
+    private var tierTint: Color { anomalyTierTint(judged.card.actionSafetyTier) }
+    private var tierSymbol: String { anomalyTierSymbol(judged.card.actionSafetyTier) }
     /// Spelled-out status word for a non-technical reader.
     private var tierStatusWord: String {
         switch judged.card.actionSafetyTier {
@@ -890,10 +1048,7 @@ struct DiagnosisCardView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 ForEach(result.evidence, id: \.url) { ev in
-                    Link(destination: URL(string: ev.url) ?? URL(string: "https://anomalous.bot")!) {
-                        Label(ev.note, systemImage: "link").font(.callout)
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
+                    sourceLink(ev.url, ev.note, font: .callout)
                 }
             }
         }
@@ -994,5 +1149,115 @@ struct InlineRetryError: View {
         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.orange.opacity(0.28), lineWidth: 1))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(message). Retry.")
+    }
+}
+
+// MARK: - Shared safety-tier glyphs
+
+/// The tier icon — a glanceable status light: green shield = safe to act,
+/// amber triangle = caution, gray ⓘ = explain-only. A SHIELD not a checkmark
+/// (the bare checkmark.circle collided with the Resolved badge). Shared so the
+/// single card and the group header never drift.
+func anomalyTierSymbol(_ tier: Int) -> String {
+    switch tier {
+    case 1: return "checkmark.shield.fill"
+    case 2: return "exclamationmark.triangle.fill"
+    default: return "info.circle.fill"
+    }
+}
+
+func anomalyTierTint(_ tier: Int) -> Color {
+    switch tier {
+    case 1: return .green
+    case 2: return .orange
+    default: return .secondary
+    }
+}
+
+// MARK: - Grouped instances
+
+/// A disclosure card grouping ≥2 anomalous instances of the SAME program
+/// (macOS spawns one CGPDFService helper per PDF client, one mdworker per
+/// index job, …). Collapsed it's a single clean summary — no pid clutter;
+/// expanded it reveals each instance as its own full card, pid-tagged there
+/// (`disambiguate`) where you actually need to tell them apart. Reuses
+/// DiagnosisCardView wholesale, so every per-instance capability — Get Help,
+/// the action buttons, Details, discovery — stays intact.
+struct GroupedAnomalyCard: View {
+    let instances: [AppState.JudgedAnomaly]
+    var appState: AppState
+    @State private var expanded = false
+
+    /// The instance whose verdict and tier headline the group. Instances of one
+    /// program read alike; take the first (the list is already severity-ordered).
+    private var representative: AppState.JudgedAnomaly { instances[0] }
+    private var name: String { representative.anomaly.identity.executableName }
+    /// Every member has a paid expert answer — the group earns a ✨ too.
+    private var allExpertAnswered: Bool {
+        instances.allSatisfy { if case .completed = $0.escalation { return true } else { return false } }
+    }
+
+    var body: some View {
+        // One shared tray (same frosted material + radius as a single card) holds
+        // the header and — when expanded — every member. The members render
+        // background-less (`embedded`) so it reads as items in one container, not
+        // a stack of nested cards. Collapsed, the tray is indistinguishable from
+        // any other card in the list.
+        VStack(spacing: 0) {
+            header
+            if expanded {
+                ForEach(Array(instances.enumerated()), id: \.element.id) { idx, judged in
+                    Divider().padding(.horizontal, 10)
+                    DiagnosisCardView(judged: judged, onDismiss: {
+                        appState.dismiss(judged)
+                    }, appState: appState, showGetHelp: true,
+                    instanceLabel: "Process \(idx + 1)", embedded: true)
+                }
+            }
+        }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 7) {
+                // No tier icon on the group header — the members carry their own.
+                HStack(spacing: 5) {
+                    Text(name)
+                        .font(.body.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text(verbatim: "(\(instances.count))")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .layoutPriority(1)
+                    if allExpertAnswered {
+                        Image(systemName: "sparkles")
+                            .foregroundStyle(.green)
+                            .imageScale(.small)
+                            .help("Expert answers ready — expand to read them.")
+                            .accessibilityLabel("Expert answers ready")
+                            .layoutPriority(1)
+                    }
+                }
+                Spacer(minLength: 6)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
+            }
+            Text(representative.card.isThisNormal.sentenceCased)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(14)
+        .contentShape(Rectangle())
+        .onTapGesture { withAnimation(.snappy(duration: 0.28)) { expanded.toggle() } }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(name), \(instances.count) instances. \(representative.card.isThisNormal)")
+        .accessibilityHint(expanded ? "Collapse" : "Expand to see each instance")
+        .accessibilityAddTraits(.isButton)
     }
 }
