@@ -234,6 +234,12 @@ final class AppState {
         return "https://api.anomalous.bot"
     }
 
+    /// True when the app is pointed at a local/dev server rather than
+    /// production — the only context in which the server offers the dev
+    /// direct-credit top-up path (Stripe isn't configured locally).
+    static var usingDevServer: Bool { resolvedServer != "https://api.anomalous.bot" }
+    var usingDevServer: Bool { Self.usingDevServer }
+
     /// Guard the override so a release build can't be aimed at an arbitrary
     /// remote host. Delegates to the shared, unit-tested `ServerOverridePolicy`;
     /// this wrapper only supplies the build configuration. Debug builds allow
@@ -372,7 +378,12 @@ final class AppState {
         request.setValue("Bearer \(accountToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["amount_cents": amountCents])
+        // Against a local/dev server, ask for the direct-credit path (the server
+        // still fail-closes on ANOMALOUS_ALLOW_DEV_CREDIT) so top-ups are
+        // testable without Stripe keys. Production ignores it and uses Checkout.
+        var body: [String: Any] = ["amount_cents": amountCents]
+        if usingDevServer { body["dev"] = true }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -381,6 +392,10 @@ final class AppState {
             if code == 201, let urlString = json?["checkout_url"] as? String, let url = URL(string: urlString) {
                 NSWorkspace.shared.open(url)
                 topupStatus = "Opening secure checkout in your browser…"
+            } else if code == 200, let cents = json?["balance_cents"] as? Int {
+                // Dev direct-credit succeeded — reflect the new balance at once.
+                accountStatus = .active(balanceCents: cents)
+                topupStatus = "Added \(Self.dollars(amountCents)) — balance is now \(Self.dollars(cents))."
             } else if code == 503 {
                 topupStatus = "Payments aren't enabled yet. Please try again later."
             } else if code == 401 {
@@ -391,6 +406,11 @@ final class AppState {
         } catch {
             topupStatus = "Network error — check your connection and try again."
         }
+    }
+
+    /// Cents → "$D.CC" for balance/top-up copy.
+    static func dollars(_ cents: Int) -> String {
+        String(format: "$%.2f", Double(cents) / 100)
     }
 
     private let collector = Collector()
@@ -1007,6 +1027,9 @@ final class AppState {
             judged.genuinelyUnknown = Self.genuinelyUnknown(
                 anomaly: anomaly, hasCorpusEntry: hasCorpusEntry, judgedByModel: cached.judgedByModel
             )
+            if let expert = await baselineStore.cachedExpertResult(processKey: processKey, kind: anomaly.kind) {
+                judged.escalation = .completed(expert)   // you paid once — keep the answer
+            }
             anomalies.append(judged)
             await notifySurfaced(judged)
             maybeDiscover(judged)
@@ -1054,6 +1077,9 @@ final class AppState {
         judged.genuinelyUnknown = Self.genuinelyUnknown(
             anomaly: anomaly, hasCorpusEntry: hasCorpusEntry, judgedByModel: judged.judgedByModel
         )
+        if let expert = await baselineStore.cachedExpertResult(processKey: processKey, kind: anomaly.kind) {
+            judged.escalation = .completed(expert)   // you paid once — keep the answer
+        }
         await baselineStore.cacheDiagnosis(
             CachedDiagnosis(card: judged.card, kind: anomaly.kind, judgedByModel: judged.judgedByModel),
             processKey: processKey, kind: anomaly.kind
@@ -1454,6 +1480,9 @@ final class AppState {
                 hasCorpusEntry: knowledgeMap?.entry(forProcessName: sample.identity.executableName) != nil,
                 judgedByModel: cached.judgedByModel
             )
+            if let expert = await baselineStore.cachedExpertResult(processKey: processKey, kind: anomaly.kind) {
+                judged.escalation = .completed(expert)   // you paid once — keep the answer
+            }
             anomalies.append(judged)
             if returnedWorse != nil { await notifySurfaced(judged) }
             maybeDiscover(judged)
@@ -1793,6 +1822,11 @@ final class AppState {
     /// the account-linked payload (safe fields only — see PayloadComposer),
     /// logs it byte-for-byte, and POSTs it. Only reachable when an account
     /// token is configured; the anonymous flow is never involved.
+    /// A submitted-but-not-yet-answered triage per anomaly, so Retry can RESUME
+    /// polling the same job instead of POSTing a new one (each POST debits the
+    /// submission charge upfront — a re-POST would charge again).
+    private var pendingTriageID: [UUID: Int] = [:]
+
     func escalate(_ judged: JudgedAnomaly) async {
         guard canEscalate, let index = anomalies.firstIndex(where: { $0.id == judged.id }) else { return }
         anomalies[index].escalation = .sending
@@ -1803,19 +1837,12 @@ final class AppState {
             osVersion: serverDescription.isEmpty ? "" : Self.osVersionString,
             hardwareClass: SignatureComposer.hardwareClass
         )
-        let client = EscalationClient(
-            baseURL: serverBaseURL,
-            bearerToken: accountToken,
-            sendLog: SendLog(directory: sendLogDirectory)
-        )
         do {
-            let accepted = try await client.escalate(payload)
+            let accepted = try await escalationClient().escalate(payload)
+            pendingTriageID[judged.id] = accepted.id
             setEscalation(.sent(accepted.id), for: judged)
             print("[anomalous] escalated \(judged.anomaly.identity.executableName): triage #\(accepted.id)")
-            // Receive half: poll for the expert diagnosis and show it.
-            let result = try await client.awaitResult(id: accepted.id)
-            setEscalation(.completed(result), for: judged)
-            print("[anomalous] triage #\(accepted.id) result: \(result.suggestedAction ?? result.note ?? "—")")
+            try await pollTriage(id: accepted.id, for: judged)
         } catch EscalationClient.EscalationError.insufficientBalance {
             // Not a retryable failure — the fix is to add credit.
             setEscalation(.needsCredit, for: judged)
@@ -1823,6 +1850,42 @@ final class AppState {
             setEscalation(.failed(Self.escalationMessage(error)), for: judged)
             print("[anomalous] escalation failed: \(error)")
         }
+    }
+
+    /// Retry a timed-out escalation. If we still hold the triage id, RESUME
+    /// polling it (the answer is likely just still cooking — no new POST, no
+    /// second charge). Only start a fresh triage when there's nothing to resume.
+    func retryEscalation(_ judged: JudgedAnomaly) async {
+        guard canEscalate else { return }
+        guard let id = pendingTriageID[judged.id] else { await escalate(judged); return }
+        setEscalation(.sent(id), for: judged)
+        do {
+            try await pollTriage(id: id, for: judged)
+        } catch EscalationClient.EscalationError.insufficientBalance {
+            setEscalation(.needsCredit, for: judged)
+        } catch {
+            setEscalation(.failed(Self.escalationMessage(error)), for: judged)
+        }
+    }
+
+    /// Poll for the expert diagnosis and show it. The research runs server-side
+    /// (queued Claude, ~a minute), so the window generously covers it.
+    private func pollTriage(id: Int, for judged: JudgedAnomaly) async throws {
+        let result = try await escalationClient().awaitResult(id: id, attempts: 60, interval: .seconds(2))
+        pendingTriageID[judged.id] = nil
+        setEscalation(.completed(result), for: judged)
+        // Persist the paid answer by condition so it survives auto-resolve →
+        // re-detection: the user paid once, they keep the answer.
+        await baselineStore.cacheExpertResult(
+            result,
+            processKey: BaselineStore.key(for: judged.anomaly.identity),
+            kind: judged.anomaly.kind
+        )
+        print("[anomalous] triage #\(id) result: \(result.suggestedAction ?? result.note ?? "—")")
+    }
+
+    private func escalationClient() -> EscalationClient {
+        EscalationClient(baseURL: serverBaseURL, bearerToken: accountToken, sendLog: SendLog(directory: sendLogDirectory))
     }
 
     private func setEscalation(_ state: EscalationState, for judged: JudgedAnomaly) {
@@ -1844,9 +1907,11 @@ final class AppState {
         if hours >= 48 { duration = "for \(plural(Int(hours / 24), "day"))" }
         else if hours >= 1 { duration = "for \(plural(Int(hours), "hour"))" }
         else {
-            // We know the exact window — say the minutes, not a vague "under an hour."
-            let mins = Int(anomaly.windowSeconds / 60)
-            duration = mins >= 1 ? "for \(plural(mins, "minute"))" : "for under a minute"
+            // Precise + dynamic: exact seconds under a minute ("for 45 seconds"),
+            // whole minutes otherwise ("for 15 minutes") — never a vague floor.
+            let secs = Int(anomaly.windowSeconds.rounded())
+            duration = secs >= 60 ? "for \(plural(secs / 60, "minute"))"
+                                  : "for \(plural(max(1, secs), "second"))"
         }
         let current = anomaly.magnitudeCurve.last ?? 0
 

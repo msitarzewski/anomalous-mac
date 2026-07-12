@@ -14,8 +14,8 @@ public struct EscalationClient: Sendable {
 
     /// The expert diagnosis returned by the recon backend — the same
     /// diagnosis-card shape the on-device model fills, plus cited evidence.
-    public struct ExpertResult: Sendable, Equatable {
-        public struct Evidence: Sendable, Equatable, Decodable {
+    public struct ExpertResult: Sendable, Equatable, Codable {
+        public struct Evidence: Sendable, Equatable, Codable {
             public let url: String
             public let note: String
         }

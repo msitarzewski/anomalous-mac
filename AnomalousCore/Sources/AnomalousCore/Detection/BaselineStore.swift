@@ -143,13 +143,17 @@ public actor BaselineStore {
         /// Cached diagnosis cards, keyed by "processKey|anomalyKind" — the
         /// same condition on the same process reuses its card verbatim.
         var diagnoses: [String: CachedDiagnosis] = [:]
+        /// Cached PAID expert answers ("Get Help"), keyed the same way. When a
+        /// resolved card re-trips for a condition already answered, the card
+        /// shows the prior answer instead of the buy button — you paid once.
+        var expertResults: [String: EscalationClient.ExpertResult] = [:]
         /// Phase 2 robust/seasonal state, keyed by lineage (schema v2).
         var robust: [String: RobustBaselines] = [:]
 
         init() {}
 
         enum CodingKeys: String, CodingKey {
-            case schemaVersion, baselines, flagged, diagnoses, robust
+            case schemaVersion, baselines, flagged, diagnoses, expertResults, robust
         }
 
         // Versioned decode: a v1 baselines.json (no `robust` key) must load
@@ -163,6 +167,7 @@ public actor BaselineStore {
             baselines = try c.decodeIfPresent([String: BaselineStats].self, forKey: .baselines) ?? [:]
             flagged = try c.decodeIfPresent([FlaggedRecord].self, forKey: .flagged) ?? []
             diagnoses = try c.decodeIfPresent([String: CachedDiagnosis].self, forKey: .diagnoses) ?? [:]
+            expertResults = try c.decodeIfPresent([String: EscalationClient.ExpertResult].self, forKey: .expertResults) ?? [:]
             robust = try c.decodeIfPresent([String: RobustBaselines].self, forKey: .robust) ?? [:]
         }
     }
@@ -368,6 +373,16 @@ public actor BaselineStore {
 
     public func cacheDiagnosis(_ diagnosis: CachedDiagnosis, processKey: String, kind: Anomaly.Kind) {
         snapshot.diagnoses[Self.diagnosisKey(processKey, kind)] = diagnosis
+    }
+
+    // MARK: - Paid expert-answer cache ("Get Help")
+
+    public func cachedExpertResult(processKey: String, kind: Anomaly.Kind) -> EscalationClient.ExpertResult? {
+        snapshot.expertResults[Self.diagnosisKey(processKey, kind)]
+    }
+
+    public func cacheExpertResult(_ result: EscalationClient.ExpertResult, processKey: String, kind: Anomaly.Kind) {
+        snapshot.expertResults[Self.diagnosisKey(processKey, kind)] = result
     }
 
     public var flaggedCount: Int { snapshot.flagged.count }

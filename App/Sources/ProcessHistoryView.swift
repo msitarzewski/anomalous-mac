@@ -35,8 +35,11 @@ struct ProcessHistoryView: View {
         }
     }
 
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    private var sidebarCollapsed: Bool { columnVisibility == .detailOnly }
+
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
         } detail: {
             detail
@@ -79,17 +82,21 @@ struct ProcessHistoryView: View {
             }
         }
         .toolbar {
-            ToolbarItem {
-                Menu {
-                    Picker("Sort by", selection: $sort) {
-                        ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
+            // Sorting only makes sense while the process list is visible — hide
+            // the control (no reserved slot) when the sidebar is collapsed.
+            if !sidebarCollapsed {
+                ToolbarItem {
+                    Menu {
+                        Picker("Sort by", selection: $sort) {
+                            ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.inline)
+                    } label: {
+                        Label("Sort", systemImage: "arrow.up.arrow.down")
                     }
-                    .pickerStyle(.inline)
-                } label: {
-                    Label("Sort", systemImage: "arrow.up.arrow.down")
+                    .menuIndicator(.hidden)
+                    .help("Sort processes")
                 }
-                .menuIndicator(.hidden)
-                .help("Sort processes")
             }
         }
         .navigationSplitViewColumnWidth(min: 210, ideal: 240, max: 320)
@@ -141,6 +148,16 @@ private struct ProcessDetailView: View {
         proc.bundleID ?? "system process · no bundle id"
     }
 
+    /// Kinds collapsed to distinct DISPLAY labels (first raw kind kept for its
+    /// colour), so kinds sharing a label don't render duplicate pills.
+    private var distinctTypePills: [(label: String, kind: String)] {
+        var seen = Set<String>()
+        return proc.kinds.compactMap { kind in
+            let label = HistoryStyle.kindLabel(kind)
+            return seen.insert(label).inserted ? (label, kind) : nil
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -159,11 +176,14 @@ private struct ProcessDetailView: View {
             Text(proc.displayName).font(.title2).fontWeight(.semibold)
             Text(identityLine).font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 6) {
-                ForEach(proc.kinds.prefix(4), id: \.self) { kind in
-                    Text(HistoryStyle.kindLabel(kind))
+                // Dedupe by DISPLAY label: several raw kinds share one label
+                // (sustained_cpu + cputime_ratio → "High CPU"), which otherwise
+                // renders the same pill twice.
+                ForEach(distinctTypePills.prefix(4), id: \.label) { pill in
+                    Text(pill.label)
                         .font(.caption2)
                         .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(HistoryStyle.kindColor(kind).opacity(0.18), in: Capsule())
+                        .background(HistoryStyle.kindColor(pill.kind).opacity(0.18), in: Capsule())
                 }
             }
             Text(summaryLine)

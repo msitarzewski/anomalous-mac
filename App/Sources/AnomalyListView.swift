@@ -276,7 +276,11 @@ struct DiagnosisCardView: View {
             }
         }
         .padding(14)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+        // A frosted MATERIAL, not a faint tint: it blurs whatever's behind the
+        // translucent popover (a saturated wallpaper otherwise bleeds through and
+        // washes out the secondary text) and turns fully opaque under Reduce
+        // Transparency. Legibility over any desktop.
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
         .opacity(judged.isResolved ? 0.55 : 1)          // fading out as it resolves
         .animation(.easeOut(duration: 0.3), value: judged.isResolved)
         .contentShape(Rectangle())
@@ -937,7 +941,7 @@ struct GetHelpControl: View {
                 .tint(.orange)
                 .help("Opens Account, where you can top up your prepaid balance. Then tap Get Help again.")
             case .failed(let message):
-                InlineRetryError(message: message) { Task { await appState.escalate(judged) } }
+                InlineRetryError(message: message) { Task { await appState.retryEscalation(judged) } }
             }
         }
     }

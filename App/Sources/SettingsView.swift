@@ -24,6 +24,7 @@ struct SettingsView: View {
     @State private var showUnlock = false
     @State private var devPassword = ""
     @State private var unlockFailed = false
+    @State private var pendingTopupCents: Int?
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -113,10 +114,8 @@ struct SettingsView: View {
                 Text("Add funds")
                 Spacer()
                 ForEach([500, 1000, 2000], id: \.self) { cents in
-                    Button("$\(cents / 100)") {
-                        Task { await appState.addFunds(amountCents: cents) }
-                    }
-                    .disabled(appState.topupInFlight)
+                    Button("$\(cents / 100)") { pendingTopupCents = cents }
+                        .disabled(appState.topupInFlight)
                 }
             }
             if let status = appState.topupStatus {
@@ -124,6 +123,20 @@ struct SettingsView: View {
             }
             Text("Opens secure Stripe checkout in your browser. You're only charged when payment completes; credit is added to your prepaid balance.")
                 .font(.footnote).foregroundStyle(.secondary)
+        }
+        .confirmationDialog(
+            "Add \(dollars(pendingTopupCents ?? 0)) to your balance?",
+            isPresented: Binding(get: { pendingTopupCents != nil }, set: { if !$0 { pendingTopupCents = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingTopupCents
+        ) { cents in
+            Button("Add \(dollars(cents))") {
+                Task { await appState.addFunds(amountCents: cents) }
+                pendingTopupCents = nil
+            }
+            Button("Cancel", role: .cancel) { pendingTopupCents = nil }
+        } message: { cents in
+            Text("Your payment method will be charged \(dollars(cents)) (USD), and the credit is added to your balance right away. Just a heads-up before we open checkout.")
         }
     }
 
