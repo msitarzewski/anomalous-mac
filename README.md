@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="media/icon.png" width="120" alt="Anomalous app icon — a bar chart on a deep-red rounded square where one bar spikes up into a red arrow.">
+</p>
+
 # Anomalous — macOS sensor
 
 **[anomalous.bot](https://anomalous.bot)** · **[Download](https://anomalous.bot)** · **[Sponsor ♥](https://github.com/sponsors/msitarzewski)**

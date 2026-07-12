@@ -1,9 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 2134 2134">
- <g fill="none" stroke="#ffffff" stroke-width="116.67" stroke-linecap="round">
-  <path d="M517.484,1071.444l0,617.039"/>
-  <path d="M737.946,875.611l0,812.872"/>
-  <path d="M958.408,1071.444l0,617.039"/>
-  <path d="M1399.332,942.278l0,746.206"/>
-  <path d="M1619.794,1283.944l0,404.539"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+ <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round">
+  <g transform="matrix(1.798586,0,0,1.696751,-168.069694,-130.313226)"><path d="M225.996,445.293L225.996,577.472" stroke-width="43.47"/></g>
+  <g transform="matrix(3.108445,0,0,2.864807,-281.695342,-804.832235)"><path d="M225.996,445.293L225.996,577.472" stroke-width="25.43"/></g>
+  <g transform="matrix(2.54664,0,0,2.347036,210.065397,-505.83406)"><path d="M225.996,445.293L225.996,577.472" stroke-width="31.03"/></g>
  </g>
 </svg>
