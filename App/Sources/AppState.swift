@@ -753,7 +753,13 @@ final class AppState {
         // transition needs a manual restart, then every update self-heals.
         if !helperReconciled, case .installed = helper.status {
             helperReconciled = true
-            _ = await helper.reconcileVersion()
+            // First recover a STALE registration (claims installed but the daemon
+            // isn't actually loaded — e.g. the bundle was replaced under it); that
+            // re-registers and re-surfaces the approval banner. Only if it IS
+            // reachable do we reconcile a version skew.
+            if await helper.repairIfUnreachable() == false {
+                _ = await helper.reconcileVersion()
+            }
         }
         // Corpus refresh (fire-and-forget, idempotent under 24h): on an
         // update, re-merge over the shipped map so new reviewed identities

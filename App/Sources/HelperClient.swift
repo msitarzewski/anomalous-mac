@@ -217,6 +217,26 @@ final class HelperClient {
         return await transport.version() == HelperConstants.version
     }
 
+    /// Recover from a STALE registration. SMAppService can report the daemon
+    /// enabled (so `status` is `.installed` and the "Enable" banner stays hidden)
+    /// while launchd never actually loaded it — e.g. the app bundle was replaced
+    /// out from under a live registration, or a previously ad-hoc helper was
+    /// rejected. An explicit XPC probe then fails and monitoring is silently dead
+    /// with no way to re-enable from the UI. This does its OWN probe (NOT the
+    /// backoff-gated tick): if it claims installed but can't be reached,
+    /// unregister + re-register from the current (signed) bundle so launchd
+    /// reloads it and the approval banner reappears. Returns true if it repaired.
+    func repairIfUnreachable() async -> Bool {
+        guard case .installed = status else { return false }
+        if await transport.version() != nil { active = true; return false }  // genuinely reachable
+        try? await service.unregister()
+        transport.invalidateConnection()
+        try? service.register()
+        refreshStatus()          // → .requiresApproval, so the banner reappears
+        beginApprovalPolling()
+        return true
+    }
+
     /// Root-wide sample, or nil if the helper is unavailable (caller falls
     /// back to unprivileged sampling).
     func sampleAll() async -> [ProcessSample]? {

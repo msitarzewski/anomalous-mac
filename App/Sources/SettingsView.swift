@@ -278,8 +278,11 @@ struct SettingsView: View {
             Text("System anomaly detection for macOS — Activity Monitor with a “So what?” and “Now what?” layer.")
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .lineSpacing(5)          // open up the leading between the wrapped lines
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal)
+                // Cap the width so it wraps to a couple of balanced lines instead
+                // of running the full window and orphaning the last word.
+                .frame(maxWidth: 360)
 
             HStack(spacing: 14) {
                 Link("Website", destination: URL(string: "https://anomalous.bot")!)
