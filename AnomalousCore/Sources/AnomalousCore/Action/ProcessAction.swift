@@ -34,11 +34,51 @@ public enum ProcessAction: Sendable, Equatable {
     /// Derive the offered action from the card's safety tier + anomaly kind.
     /// Tier ≥ 3 (or unknown) always → explainOnly.
     public static func offered(tier: Int, kind: Anomaly.Kind, isApp: Bool) -> ProcessAction {
-        guard tier == 1 else { return .explainOnly }
-        switch kind {
-        case .rssLeak, .rssCeiling: return isApp ? .restartApp : .terminate
-        default: return .terminate
+        // Tier 3 is "do not act" (unknown / root / data-holding) → explain only,
+        // no button. Tiers 1 AND 2 offer the action — tier 2 is "caution," which
+        // the card styles accordingly, not "hide the button" (which left cards
+        // whose own verdict said "quit it" with no way to do it).
+        guard tier <= 2 else { return .explainOnly }
+        // An app is quit-and-reopened (Restart — matches "quit it and reopen X");
+        // a background helper is quit (Quit — macOS respawns it).
+        return isApp ? .restartApp : .terminate
+    }
+
+    /// Aggressiveness rank, SAFEST first — the total order reconciliation uses.
+    /// `explainOnly` (do nothing) < `update` (no kill) < `restartApp` (quit +
+    /// relaunch the user's own app) < `terminate` (signal a process). Force
+    /// (SIGKILL) is a separate flag on the terminate path, not a rank here.
+    private var aggression: Int {
+        switch self {
+        case .explainOnly: return 0
+        case .update: return 1
+        case .restartApp: return 2
+        case .terminate: return 3
         }
+    }
+
+    /// Map the server's `safe_action` enum → a concrete action. The LLM's
+    /// constrained choice: quit/force_quit → terminate (the force flag rides the
+    /// existing terminate path, not the enum), restart → restartApp, update →
+    /// update, none → explainOnly. Unknown/nil → nil (no opinion).
+    public static func from(safeAction: String?) -> ProcessAction? {
+        switch safeAction?.lowercased() {
+        case "quit", "force_quit": return .terminate
+        case "restart": return .restartApp
+        case "update": return .update
+        case "none": return .explainOnly
+        default: return nil
+        }
+    }
+
+    /// Take-the-safer reconciliation: the LLM can only make the offered action
+    /// SAFER, never more aggressive. Returns the LESS aggressive of the model's
+    /// choice and the deterministic offer. A nil `llm` (no opinion / unknown
+    /// enum) leaves the deterministic offer untouched. Identity stays identity —
+    /// this governs the ACTION only.
+    public static func reconciled(llm: ProcessAction?, deterministic: ProcessAction) -> ProcessAction {
+        guard let llm else { return deterministic }
+        return llm.aggression <= deterministic.aggression ? llm : deterministic
     }
 }
 

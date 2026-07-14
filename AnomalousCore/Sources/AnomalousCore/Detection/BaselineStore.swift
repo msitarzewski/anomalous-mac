@@ -255,6 +255,16 @@ public actor BaselineStore {
         snapshot.flagged.append(FlaggedRecord(identity: identity, kind: kind.rawValue, flaggedAt: .now))
     }
 
+    /// The ORIGINAL flag time for this identity (within the TTL). markFlagged is
+    /// first-write-wins, so this is when the process was FIRST noticed — and it
+    /// persists across app relaunches (up to 7 days), so "First flagged" reflects
+    /// the true first notice instead of resetting to the session's re-detection.
+    /// Nil if never flagged or aged out.
+    public func firstFlaggedAt(for identity: ProcessIdentity) -> Date? {
+        let cutoff = Date.now.addingTimeInterval(-Self.flaggedTTL)
+        return snapshot.flagged.first { $0.identity == identity && $0.flaggedAt >= cutoff }?.flaggedAt
+    }
+
     // MARK: - Baselines
 
     public static func key(for identity: ProcessIdentity) -> String {

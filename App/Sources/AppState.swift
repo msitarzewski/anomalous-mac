@@ -50,6 +50,13 @@ final class AppState {
         /// returned. `sourced`/sources drive the "Sourced by Anomalous" UI.
         var discovery: DiscoveryState = .none
         var discoverySources: [DiscoveryClient.Assessment.Source] = []
+        /// The public corpus page for this process, from the discovery
+        /// assessment — the single "Sourced by Anomalous" link the card offers.
+        var discoveryCorpusURL: URL? = nil
+        /// The server's constrained `safe_action` enum, reconciled take-the-safer
+        /// with the deterministic offer to drive the card's ACTION (never the
+        /// identity text). nil → deterministic offer stands.
+        var discoverySafeAction: String? = nil
         /// The card has no real identity — no corpus entry, and the on-device
         /// model had no bundle to anchor on (or wasn't available). Only these
         /// warrant a discovery lookup; a thermal/hung/known card never does.
@@ -74,11 +81,21 @@ final class AppState {
         /// one-minute blip. Distinct from `returnedWorse` (the anti-mute marker
         /// for an ACKNOWLEDGED/snoozed condition earning its way back).
         var recurrence: RecurrenceSummary? = nil
+        /// The persisted first-flag time (survives relaunch, 7-day TTL). Drives
+        /// "First flagged …" so a long-running anomaly's clock isn't reset to the
+        /// session's re-detection; falls back to `anomaly.detectedAt`.
+        var firstFlaggedAt: Date? = nil
 
         var isApp: Bool { anomaly.identity.bundleID != nil }
-        /// The concrete action offered, gated by the card's safety tier.
+        /// The concrete action offered, gated by the card's safety tier, then
+        /// reconciled take-the-safer with any discovered `safe_action` — the LLM
+        /// can only make the offer SAFER, never more aggressive.
         var action: ProcessAction {
-            ProcessAction.offered(tier: card.actionSafetyTier, kind: anomaly.kind, isApp: isApp)
+            let deterministic = ProcessAction.offered(tier: card.actionSafetyTier, kind: anomaly.kind, isApp: isApp)
+            return ProcessAction.reconciled(
+                llm: ProcessAction.from(safeAction: discoverySafeAction),
+                deterministic: deterministic
+            )
         }
         /// Escalation earns its place when the local stack was thin: an
         /// unknown process, or an explain-only (tier-3) card. Known,
@@ -1020,6 +1037,9 @@ final class AppState {
         // the footer. Skipped when the anti-mute marker already tells the
         // "came back" story, so the two never double up.
         let recurrence = returnedWorse == nil ? recurrenceInfo(for: anomaly) : nil
+        // The ORIGINAL flag time, persisted across relaunches — "First flagged"
+        // reflects the true first notice, not this session's re-detection.
+        let firstFlaggedAt = await baselineStore.firstFlaggedAt(for: anomaly.identity)
         let processKey = BaselineStore.key(for: anomaly.identity)
         // Channel-aware: a variant like dev.zed.Zed-Preview resolves to the base
         // app's record, so it is NOT treated as unknown (which would fire a
@@ -1040,6 +1060,7 @@ final class AppState {
             var judged = JudgedAnomaly(anomaly: anomaly, card: cached.card, judgedByModel: cached.judgedByModel, baselineSentence: baseline)
             judged.returnedWorse = returnedWorse
             judged.recurrence = recurrence
+            judged.firstFlaggedAt = firstFlaggedAt
             judged.genuinelyUnknown = Self.genuinelyUnknown(
                 anomaly: anomaly, hasCorpusEntry: hasCorpusEntry, judgedByModel: cached.judgedByModel
             )
@@ -1090,6 +1111,7 @@ final class AppState {
         }
         judged.returnedWorse = returnedWorse
         judged.recurrence = recurrence
+        judged.firstFlaggedAt = firstFlaggedAt
         judged.genuinelyUnknown = Self.genuinelyUnknown(
             anomaly: anomaly, hasCorpusEntry: hasCorpusEntry, judgedByModel: judged.judgedByModel
         )
@@ -1298,6 +1320,8 @@ final class AppState {
         anomalies[i].card = card
         anomalies[i].discovery = resolved
         anomalies[i].discoverySources = assessment.sources
+        anomalies[i].discoveryCorpusURL = assessment.corpusURL
+        anomalies[i].discoverySafeAction = assessment.safeAction
         // Cache the outcome per lineage too, so re-flags before the diagnosis
         // re-cache lands don't re-trigger a lookup.
         discoveryByLineage[BaselineStore.key(for: anomaly.identity)] = DiscoveryRecord(state: resolved, at: .now)
@@ -1406,12 +1430,22 @@ final class AppState {
     /// On UNKNOWN live-CPU data we keep the card: a sampling gap must never
     /// falsely resolve a running runaway (mirrors the exit miss-grace).
     private func stillActive(_ sample: ProcessSample, candidates: [Anomaly]) -> Bool {
-        if candidates.contains(where: { $0.kind != .cpuTimeRatio }) { return true }
-        if candidates.contains(where: { $0.kind == .cpuTimeRatio }) {
-            guard let live = DetectionRules.instantaneousCPUPercent(history: history[sample.identity] ?? []) else { return true }
-            return live >= thresholds.cpuTimeRatioActivePercent
+        // Mirror "Check again" (verify): the window-based detection rules keep
+        // firing for minutes after a process recovers — the window still holds
+        // the high samples — which left recovered cards PINNED until the user
+        // manually re-checked. A flagged condition is still active only if its
+        // LIVE reading is still over threshold, so use the same instantaneous
+        // check here for EVERY kind (not just cpuTimeRatio, as before).
+        guard !candidates.isEmpty else { return false }
+        let hist = history[sample.identity] ?? []
+        for candidate in candidates {
+            switch DetectionRules.liveConditionActive(kind: candidate.kind, history: hist, thresholds: thresholds) {
+            case .some(true): return true       // this condition is still live
+            case .some(false): continue         // this one has recovered
+            case .none: return true             // no live metric (hung/novel) — keep it
+            }
         }
-        return false
+        return false   // every candidate's live reading has recovered → auto-clear
     }
 
     /// An `app_hung` anomaly if this GUI app has been unresponsive past the
@@ -1513,6 +1547,7 @@ final class AppState {
             var judged = JudgedAnomaly(anomaly: anomaly, card: cached.card, judgedByModel: cached.judgedByModel, baselineSentence: baseline)
             judged.returnedWorse = returnedWorse
             judged.recurrence = returnedWorse == nil ? recurrenceInfo(for: anomaly) : nil
+            judged.firstFlaggedAt = await baselineStore.firstFlaggedAt(for: anomaly.identity)
             judged.genuinelyUnknown = Self.genuinelyUnknown(
                 anomaly: anomaly,
                 hasCorpusEntry: knowledgeMap?.entry(forProcessName: sample.identity.executableName) != nil,

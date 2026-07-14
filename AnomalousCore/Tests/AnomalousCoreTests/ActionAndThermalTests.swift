@@ -4,12 +4,19 @@ import Foundation
 
 @Suite("action layer — conservative by default")
 struct ProcessActionTests {
-    @Test("tier 3 always yields explain-only, whatever the kind")
+    @Test("tier 3 yields explain-only, whatever the kind")
     func tier3IsExplainOnly() {
         for kind in [Anomaly.Kind.cpuTimeRatio, .rssLeak, .sustainedCPU, .novelProcess] {
             #expect(ProcessAction.offered(tier: 3, kind: kind, isApp: true) == .explainOnly)
-            #expect(ProcessAction.offered(tier: 2, kind: kind, isApp: true) == .explainOnly)
         }
+    }
+
+    @Test("tier 2 (caution) still offers the action — an app restarts, a helper quits")
+    func tier2OffersAction() {
+        // Regression guard: tier 2 was returning explainOnly, so a card whose own
+        // verdict said "quit it and reopen" had NO button (the Messages wakeups case).
+        #expect(ProcessAction.offered(tier: 2, kind: .rssLeak, isApp: true) == .restartApp)
+        #expect(ProcessAction.offered(tier: 2, kind: .cpuTimeRatio, isApp: false) == .terminate)
     }
 
     @Test("tier 1 memory anomaly on an app offers Restart, not kill")
@@ -29,6 +36,45 @@ struct ProcessActionTests {
         #expect(ProcessAction.restartApp.isDestructive)
         #expect(!ProcessAction.update.isDestructive)
         #expect(!ProcessAction.explainOnly.isDestructive)
+    }
+
+    @Test("safe_action enum maps to the concrete action (force rides the terminate path)")
+    func safeActionMapping() {
+        #expect(ProcessAction.from(safeAction: "quit") == .terminate)
+        #expect(ProcessAction.from(safeAction: "force_quit") == .terminate)
+        #expect(ProcessAction.from(safeAction: "restart") == .restartApp)
+        #expect(ProcessAction.from(safeAction: "update") == .update)
+        #expect(ProcessAction.from(safeAction: "none") == .explainOnly)
+        #expect(ProcessAction.from(safeAction: "QUIT") == .terminate)   // case-insensitive
+        #expect(ProcessAction.from(safeAction: "banana") == nil)         // unknown → no opinion
+        #expect(ProcessAction.from(safeAction: nil) == nil)
+    }
+
+    @Test("reconciled takes the LESS aggressive action — the LLM can only make it safer")
+    func reconciledTakesSafer() {
+        // LLM says something SAFER than the deterministic offer → LLM wins.
+        #expect(ProcessAction.reconciled(llm: .explainOnly, deterministic: .terminate) == .explainOnly)
+        #expect(ProcessAction.reconciled(llm: .update, deterministic: .terminate) == .update)
+        #expect(ProcessAction.reconciled(llm: .restartApp, deterministic: .terminate) == .restartApp)
+        // LLM says something MORE aggressive → deterministic offer stands (clamped).
+        #expect(ProcessAction.reconciled(llm: .terminate, deterministic: .explainOnly) == .explainOnly)
+        #expect(ProcessAction.reconciled(llm: .terminate, deterministic: .update) == .update)
+        #expect(ProcessAction.reconciled(llm: .restartApp, deterministic: .update) == .update)
+        // Equal → unchanged; nil → deterministic untouched.
+        #expect(ProcessAction.reconciled(llm: .terminate, deterministic: .terminate) == .terminate)
+        #expect(ProcessAction.reconciled(llm: nil, deterministic: .terminate) == .terminate)
+        #expect(ProcessAction.reconciled(llm: nil, deterministic: .explainOnly) == .explainOnly)
+    }
+
+    @Test("end-to-end: a tier-1 terminate offer is downgraded by a 'none' safe_action")
+    func reconciledEndToEnd() {
+        let deterministic = ProcessAction.offered(tier: 1, kind: .cpuTimeRatio, isApp: false)
+        #expect(deterministic == .terminate)
+        let reconciled = ProcessAction.reconciled(
+            llm: ProcessAction.from(safeAction: "none"),
+            deterministic: deterministic
+        )
+        #expect(reconciled == .explainOnly)   // stateful/system process: never a kill
     }
 
     @Test("terminating a nonexistent pid reports a typed error, never crashes")

@@ -346,6 +346,22 @@ struct DiagnosisCardView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
+    /// The single "Sourced by Anomalous" attribution shown on a discovered card.
+    /// When a corpus page exists it's a link (reusing `sourceLink`'s
+    /// Button+openURL+dismiss); otherwise the attribution shows with NO link.
+    /// Raw per-source links are deliberately never surfaced here.
+    @ViewBuilder
+    private func sourcedByAnomalousLink(_ corpusURL: URL?) -> some View {
+        if let corpusURL {
+            sourceLink(corpusURL.absoluteString, "Sourced by Anomalous", font: .caption)
+        } else {
+            Label("Sourced by Anomalous", systemImage: "globe.badge.chevron.backward")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Sourced by Anomalous")
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             titleRow                    // process name (full width) · dismiss ×
@@ -759,25 +775,18 @@ struct DiagnosisCardView: View {
             }
             .padding(.top, 2)
         case .sourced:
-            VStack(alignment: .leading, spacing: 4) {
-                Label("Sourced by Anomalous", systemImage: "globe.badge.chevron.backward")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.blue)
-                    .accessibilityLabel("This answer was sourced by Anomalous")
-                ForEach(judged.discoverySources, id: \.url) { src in
-                    sourceLink(src.url, src.note, font: .caption)
-                }
-            }
-            .padding(.top, 2)
+            // ONE "Sourced by Anomalous" link to the public corpus page — never
+            // the raw per-source links (they can be exploit advisories). nil
+            // corpus_url → the attribution shows with no link.
+            sourcedByAnomalousLink(judged.discoveryCorpusURL)
+                .padding(.top, 2)
         case .researched(let confidence):
             VStack(alignment: .leading, spacing: 4) {
                 Label(Self.researchedCaption(confidence), systemImage: "magnifyingglass.circle")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Research answer, not yet independently verified")
-                ForEach(judged.discoverySources, id: \.url) { src in
-                    sourceLink(src.url, src.note, font: .caption)
-                }
+                sourcedByAnomalousLink(judged.discoveryCorpusURL)
             }
             .padding(.top, 2)
         case .notRecognized:
@@ -896,8 +905,11 @@ struct DiagnosisCardView: View {
                 + Text(rec.scopedToToday ? " · returned \(rec.returnCount)× today"
                                          : " · returned \(rec.returnCount)×")
         } else {
+            // Prefer the PERSISTED first-flag time (survives relaunch, 7-day TTL)
+            // so a long-running anomaly's clock isn't reset to this session's
+            // re-detection; fall back to the live detection time.
             Text("First flagged ")
-                + Text(judged.anomaly.detectedAt, format: .relative(presentation: .named))
+                + Text(judged.firstFlaggedAt ?? judged.anomaly.detectedAt, format: .relative(presentation: .named))
         }
     }
 
@@ -1031,20 +1043,29 @@ struct DiagnosisCardView: View {
     /// half of "Get help". Shows the grounded answer + cited evidence links,
     /// or an honest note when the backend couldn't reason.
     @ViewBuilder
+    /// Render the inline markdown the expert answer emits (**bold**, [links](…)),
+    /// preserving its line breaks — otherwise the asterisks show up literally.
+    private func markdown(_ s: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: s,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(s)
+    }
+
     private func expertResult(_ result: EscalationClient.ExpertResult) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Divider().padding(.vertical, 2)
             Label("Expert diagnosis", systemImage: "sparkles")
                 .font(.callout.weight(.semibold)).foregroundStyle(.secondary)
             if let note = result.note {
-                Text(note).font(.body).foregroundStyle(.secondary)
+                Text(markdown(note)).font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 if let what = result.whatItIs {
-                    Text(what).font(.body).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(markdown(what)).font(.body).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 if let action = result.suggestedAction {
-                    Text(action).font(.body.weight(.semibold)).foregroundStyle(.primary)
+                    Text(markdown(action)).font(.body.weight(.semibold)).foregroundStyle(.primary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 ForEach(result.evidence, id: \.url) { ev in

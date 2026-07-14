@@ -69,6 +69,15 @@ public struct DiscoveryClient: Sendable {
         /// Research self-assessed confidence ("high"/"medium") for an UNVERIFIED
         /// answer the server returned anyway; nil for verified/corpus results.
         public let confidence: String?
+        /// The public corpus page for this process — the single "Sourced by
+        /// Anomalous" link the card offers. Replaces raw per-source links (which
+        /// can be exploit advisories). nil → the label shows with no link.
+        public let corpusURL: URL?
+        /// The server-constrained safest action for THIS process, one of
+        /// "quit" | "force_quit" | "restart" | "update" | "none". Drives the
+        /// ACTION only (never the identity text); reconciled take-the-safer with
+        /// the deterministic offer. nil → no LLM opinion, deterministic stands.
+        public let safeAction: String?
 
         enum CodingKeys: String, CodingKey {
             case whatItIs = "what_it_is"
@@ -80,6 +89,8 @@ public struct DiscoveryClient: Sendable {
             case source
             case verified
             case confidence
+            case corpusURL = "corpus_url"
+            case safeAction = "safe_action"
         }
 
         public init(from decoder: any Decoder) throws {
@@ -93,12 +104,15 @@ public struct DiscoveryClient: Sendable {
             source = try c.decodeIfPresent(String.self, forKey: .source) ?? "anomalous"
             verified = try c.decodeIfPresent(Bool.self, forKey: .verified) ?? false
             confidence = try c.decodeIfPresent(String.self, forKey: .confidence)
+            corpusURL = try c.decodeIfPresent(URL.self, forKey: .corpusURL)
+            safeAction = try c.decodeIfPresent(String.self, forKey: .safeAction)
         }
 
         public init(
             whatItIs: String, whyHot: String?, isThisNormal: String,
             suggestedAction: String?, safetyTier: Int, sources: [Source],
-            source: String, verified: Bool, confidence: String? = nil
+            source: String, verified: Bool, confidence: String? = nil,
+            corpusURL: URL? = nil, safeAction: String? = nil
         ) {
             self.whatItIs = whatItIs
             self.whyHot = whyHot
@@ -109,6 +123,8 @@ public struct DiscoveryClient: Sendable {
             self.source = source
             self.verified = verified
             self.confidence = confidence
+            self.corpusURL = corpusURL
+            self.safeAction = safeAction
         }
 
         /// Whether this assessment is grounded by Anomalous research (vs a

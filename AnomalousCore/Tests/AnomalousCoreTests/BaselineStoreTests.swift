@@ -29,6 +29,27 @@ struct BaselineStoreTests {
         #expect(await reloaded.isFlagged(respawned) == false)
     }
 
+    @Test("firstFlaggedAt returns the ORIGINAL flag time and survives relaunch")
+    func firstFlaggedPersists() async {
+        let url = tempFile()
+        let store = BaselineStore(fileURL: url)
+        await store.loadIfNeeded()
+        #expect(await store.firstFlaggedAt(for: dasd) == nil)   // never flagged
+
+        await store.markFlagged(dasd, kind: .cpuTimeRatio)
+        let first = await store.firstFlaggedAt(for: dasd)
+        #expect(first != nil)
+        // First-write-wins: re-marking must NOT move the clock forward.
+        await store.markFlagged(dasd, kind: .cpuTimeRatio)
+        #expect(await store.firstFlaggedAt(for: dasd) == first)
+        await store.save()
+
+        // Survives a relaunch (fresh store off the same file).
+        let reloaded = BaselineStore(fileURL: url)
+        await reloaded.loadIfNeeded()
+        #expect(await reloaded.firstFlaggedAt(for: dasd) == first)
+    }
+
     @Test("EWMA baseline converges toward sustained readings")
     func ewmaConverges() async {
         let store = BaselineStore(fileURL: tempFile())
