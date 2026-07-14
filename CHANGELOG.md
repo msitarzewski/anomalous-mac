@@ -1,9 +1,9 @@
 # Changelog
 
 All notable changes to the Anomalous macOS sensor. Dates are release dates;
-`0.2.0` is the current unreleased build (`CFBundleVersion` 6).
+`0.2.0` (`CFBundleVersion` 6) was released 2026-07-14.
 
-## 0.2.0 — the "vibes" release *(unreleased)*
+## 0.2.0 — the "vibes" release *(2026-07-14)*
 
 The jump from a CPU‑and‑RAM watcher to a Mac that can tell you **what's wrong,
 what it is, and what to do** — and stay silent when nothing is. Everything below
