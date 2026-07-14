@@ -1,7 +1,26 @@
 # Changelog
 
 All notable changes to the Anomalous macOS sensor. Dates are release dates;
-`0.2.0` (`CFBundleVersion` 6) was released 2026-07-14.
+`0.2.1` (`CFBundleVersion` 7) is the latest release.
+
+## 0.2.1 *(2026-07-14)*
+
+Post-`0.2.0` hardening and polish.
+
+### Security
+- **CSV export hardened against spreadsheet formula injection.** A field
+  beginning with `=`, `+`, `-`, `@`, TAB, or CR is executed as a formula by
+  Excel/Numbers/Sheets; the exported history carries untrusted values (a
+  process's own name, an LLM‑written summary), so those fields are now
+  neutralized (leading apostrophe) before RFC‑4180 escaping. A failed CSV
+  save now surfaces an error instead of silently doing nothing.
+
+### Changed
+- **Larger default text in the history dashboards.** Primary reading content —
+  process‑name identifiers, incident descriptions, and the By‑Process summary
+  line — now renders at body size for readability. Secondary chrome
+  (timestamps, counts, pills) is unchanged, and all text still scales with the
+  system Accessibility Text Size setting.
 
 ## 0.2.0 — the "vibes" release *(2026-07-14)*
 

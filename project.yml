@@ -67,8 +67,8 @@ targets:
       properties:
         CFBundleDisplayName: Anomalous
         # Keep in lockstep with the app target's versions below.
-        CFBundleShortVersionString: "0.2.0"
-        CFBundleVersion: "6"
+        CFBundleShortVersionString: "0.2.1"
+        CFBundleVersion: "7"
         EXAppExtensionAttributes:
           EXExtensionPointIdentifier: com.apple.widgetkit-extension
     # xcodegen REGENERATES this file each `xcodegen generate` — the content
@@ -150,8 +150,8 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Anomalous
-        CFBundleShortVersionString: "0.2.0"
-        CFBundleVersion: "6"
+        CFBundleShortVersionString: "0.2.1"
+        CFBundleVersion: "7"
         LSUIElement: true
         LSMinimumSystemVersion: "26.0"
         # ── Sparkle auto-update ──────────────────────────────────────────
