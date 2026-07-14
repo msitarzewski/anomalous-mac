@@ -187,7 +187,7 @@ private struct ProcessDetailView: View {
                 }
             }
             Text(summaryLine)
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.body).foregroundStyle(.secondary)
                 .padding(.top, 2)
         }
     }
@@ -256,7 +256,7 @@ struct EpisodeRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
-                Text(HistoryStyle.kindLabel(entry.kind)).font(.subheadline).fontWeight(.medium)
+                Text(HistoryStyle.kindLabel(entry.kind)).font(.body).fontWeight(.medium)
                 Spacer()
                 Label(entry.resolution.label, systemImage: HistoryStyle.resolutionSymbol(entry.resolution))
                     .font(.caption.weight(.semibold))
@@ -265,7 +265,7 @@ struct EpisodeRow: View {
                     .labelStyle(.titleAndIcon)
             }
             Text(entry.summary)
-                .font(.subheadline).foregroundStyle(.secondary)
+                .font(.body).foregroundStyle(.secondary)
                 .lineLimit(2)
             Text("\(entry.resolvedAt.formatted(date: .abbreviated, time: .shortened)) · active for \(HistoryStyle.durationText(entry.duration))")
                 .font(.caption).foregroundStyle(.tertiary)

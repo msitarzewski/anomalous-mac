@@ -64,6 +64,12 @@ struct HistoryWindow: View {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let csv = HistoryCSV.string(from: appState.journalEntries)
-        try? csv.data(using: .utf8)?.write(to: url, options: .atomic)
+        do {
+            try Data(csv.utf8).write(to: url, options: .atomic)
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.messageText = "Couldn’t save the CSV"
+            alert.runModal()
+        }
     }
 }

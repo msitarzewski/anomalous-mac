@@ -302,7 +302,7 @@ private struct ProcessRow: View {
     var body: some View {
         let content = HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(proc.displayName).font(.callout).fontWeight(.medium).lineLimit(1)
+                Text(proc.displayName).font(.body).fontWeight(.medium).lineLimit(1)
                 HStack(spacing: 5) {
                     Text("last \(proc.lastResolvedAt, format: .relative(presentation: .named))")
                     if proc.count > 1 { Text("· returned \(proc.count - 1)×") }

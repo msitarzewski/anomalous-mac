@@ -52,6 +52,19 @@ struct HistoryCSVTests {
         #expect(csv.contains("\"used 90% CPU, then calmed\""))
     }
 
+    @Test("formula-injection leads are neutralized so spreadsheets don't execute them")
+    func formulaInjection() {
+        #expect(HistoryCSV.neutralize("=SUM(A1)") == "'=SUM(A1)")
+        #expect(HistoryCSV.neutralize("+1") == "'+1")
+        #expect(HistoryCSV.neutralize("-2+3") == "'-2+3")
+        #expect(HistoryCSV.neutralize("@cmd") == "'@cmd")
+        #expect(HistoryCSV.neutralize("plain") == "plain")   // ordinary text untouched
+        // a hostile process name can't smuggle a live formula into the export
+        let csv = HistoryCSV.string(from: [je("=cmd|'/C calc'!A1")])
+        #expect(csv.contains("'=cmd"))       // neutralized, rendered as text
+        #expect(!csv.contains("\n=cmd"))     // never a bare formula lead on a data row
+    }
+
     @Test("nil bundle id renders as an empty field, not the string nil")
     func nilBundle() {
         let csv = HistoryCSV.string(from: [je("dasd", bundleID: nil)])

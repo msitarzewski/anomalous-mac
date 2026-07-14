@@ -3,6 +3,8 @@ import Foundation
 /// Exports the local incident journal as CSV — a plain, portable copy the user
 /// can keep or analyse elsewhere. Pure and deterministic (inject the formatter)
 /// so it unit-tests without any app state. Local file only; nothing is sent.
+/// Untrusted fields (a process's own name, an LLM-written summary) are both
+/// RFC-4180 escaped AND neutralized against spreadsheet formula injection.
 public enum HistoryCSV {
     public static let header = [
         "process", "bundle_id", "kind", "type", "summary", "action",
@@ -30,7 +32,7 @@ public enum HistoryCSV {
                 String(Int(e.duration.rounded())),
                 e.resolution.rawValue,
             ]
-            rows.append(fields.map(escape).joined(separator: ","))
+            rows.append(fields.map { escape(neutralize($0)) }.joined(separator: ","))
         }
         // Trailing newline so appending/round-tripping stays clean.
         return rows.joined(separator: "\n") + "\n"
@@ -43,5 +45,15 @@ public enum HistoryCSV {
             return field
         }
         return "\"" + field.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+
+    /// Neutralize spreadsheet formula injection: a field beginning with =, +,
+    /// -, @, TAB, or CR is evaluated as a formula by Excel / Numbers / Sheets.
+    /// Untrusted values reach the journal (an arbitrary process's name, an
+    /// LLM-written summary), so prefix a leading `'` — spreadsheets render it
+    /// as literal text (and hide the quote). Applied before RFC-4180 escaping.
+    static func neutralize(_ field: String) -> String {
+        guard let first = field.first, "=+-@\t\r".contains(first) else { return field }
+        return "'" + field
     }
 }
