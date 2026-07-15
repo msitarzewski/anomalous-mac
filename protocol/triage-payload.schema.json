@@ -31,11 +31,6 @@
         "disk_bytes_per_second": { "type": "array", "items": { "type": "number" }, "maxItems": 240 },
         "driving_metric_curve": { "type": "array", "items": { "type": "number" }, "maxItems": 240, "description": "Fallback curve for any anomaly kind without a named field above (novel process, hung app, future rules), so metric_curves is always non-empty." }
       }
-    },
-    "knowledge_map_entry_id": { "type": ["string", "null"], "description": "If the offender matched a shipped knowledge-map entry, its ID — lets the backend skip identity research." },
-    "prior_card": {
-      "type": ["object", "null"],
-      "description": "The on-device diagnosis card, if one was produced — same DiagnosisCard schema the backend fills (Foundation Models custom-provider architecture: one schema, three rungs)."
     }
   }
 }

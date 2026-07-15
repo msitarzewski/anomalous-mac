@@ -6,7 +6,7 @@ Thanks for taking the time to look. Anomalous ships a **privileged helper that r
 
 | Version | Supported |
 |---------|-----------|
-| `0.1.x` | Yes       |
+| `0.2.x` | Yes       |
 
 Pre-1.0 project on macOS 26 (Apple Silicon). The latest released line receives security fixes.
 

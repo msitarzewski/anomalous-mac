@@ -49,7 +49,7 @@ anomalous-mac/
 │       ├── AnomalousCore/        Collector, Detection, KnowledgeMap, Judgment, Escalation, Helper protocol
 │       └── AnomalousHelper/      the root helper (runs as an SMAppService.daemon)
 ├── protocol/                     the published wire schemas (client ⇄ backend)
-├── tools/                        sign / notarize / make-dmg / make-pkg
+├── tools/                        sign / notarize / make-dmg / make-pkg / sparkle-appcast / publish-release
 ├── landing/                      the anomalous.bot marketing site
 └── project.yml                   XcodeGen source of truth (the .xcodeproj is generated)
 ```

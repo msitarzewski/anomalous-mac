@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://anomalous.bot/protocol/known-issues-feed.schema.json",
   "title": "KnownIssuesFeed",
-  "description": "The live extension of the knowledge map. Clients pull the WHOLE feed periodically and match locally (ad-blocker-list pattern) — never a per-incident lookup. Feed releases are signed; clients verify before applying.",
+  "description": "The live extension of the knowledge map (GET /api/v1/feed). Clients pull the WHOLE feed periodically and match locally (ad-blocker-list pattern) — never a per-incident lookup. Two sections in one envelope: `issues` (the legacy KnownIssue list, shape unchanged for back-compat) and `data` (the published process-identity corpus). `data` is SIGNED: `signature` is an Ed25519 detached signature over the canonical JSON of `data`, verified client-side against the pinned public key matching `key_id` before any entry grounds a card. signature/key_id/signed_at are null when no signing key is configured. Clients feature-detect the `data` section rather than gating on schema_version.",
   "type": "object",
-  "required": ["schema_version", "generated_at", "issues"],
+  "required": ["schema_version", "generated_at", "issues", "data", "signature", "key_id", "signed_at"],
   "additionalProperties": false,
   "properties": {
     "schema_version": { "type": "string", "const": "0.1.0" },
@@ -26,6 +26,44 @@
           "summary": { "type": "string", "maxLength": 2000 }
         }
       }
-    }
+    },
+    "data": {
+      "type": "array",
+      "description": "The published process-identity corpus (approved DaemonProfiles projected via toCorpusEntry) — one shape shared with a corpus/entries/{platform}/ file and the discovery response. Signed by the signature/key_id/signed_at fields below. Values are nullable because a profile may not have every field filled.",
+      "items": {
+        "type": "object",
+        "required": ["process_name", "display_name", "what_it_is", "owned_by", "when_hot_implies", "safety_tier", "safe_action", "worst_case", "causally_linked", "sources", "platform", "corrected_by", "source"],
+        "additionalProperties": false,
+        "properties": {
+          "process_name": { "type": "string", "maxLength": 255, "description": "The on-disk executable/bundle identity. Entry identity is (process_name, platform)." },
+          "display_name": { "type": ["string", "null"], "maxLength": 255 },
+          "what_it_is": { "type": ["string", "null"], "maxLength": 2000 },
+          "owned_by": { "type": ["string", "null"], "maxLength": 255 },
+          "when_hot_implies": { "type": ["string", "null"], "maxLength": 2000 },
+          "safety_tier": { "type": "integer", "minimum": 1, "maximum": 3 },
+          "safe_action": { "type": ["string", "null"], "maxLength": 1000, "description": "HUMAN prose (the enum is mapped to a sentence for the feed); null means no safe intervention exists (tier-3)." },
+          "worst_case": { "type": ["string", "null"], "maxLength": 1000 },
+          "causally_linked": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 255 } },
+          "sources": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "properties": {
+                "url": { "type": "string", "maxLength": 500 },
+                "title": { "type": ["string", "null"], "maxLength": 255 }
+              }
+            },
+            "description": "Citations grounding the entry. On a diagnosis card these collapse to a single link to the reviewed /corpus page — raw URLs are never shown."
+          },
+          "platform": { "type": "string", "enum": ["macos", "windows", "linux"] },
+          "corrected_by": { "type": ["string", "null"], "maxLength": 255 },
+          "source": { "type": "string", "enum": ["anomalous", "reviewed", "community"], "description": "Trust tier the client labels the entry with: anomalous (Haiku-verified), reviewed (human), community (human-reviewed PR)." }
+        }
+      }
+    },
+    "signature": { "type": ["string", "null"], "description": "Base64 Ed25519 detached signature over the canonical JSON of `data`. Null when no signing key is configured (clients that require signatures reject a null-signature feed)." },
+    "key_id": { "type": ["string", "null"], "description": "Identifier of the public key that verifies `signature` (first 16 hex of its SHA-256); clients pin it." },
+    "signed_at": { "type": ["string", "null"], "format": "date-time" }
   }
 }

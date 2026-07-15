@@ -3,7 +3,7 @@
 All notable changes to the Anomalous macOS sensor. Dates are release dates;
 `0.2.1` (`CFBundleVersion` 7) is the latest release.
 
-## 0.2.1 *(2026-07-14)*
+## 0.2.1 *(2026-07-15)*
 
 Post-`0.2.0` hardening and polish.
 
