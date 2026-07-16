@@ -35,6 +35,16 @@ final class AppState {
         /// The API honestly couldn't identify it — keep the unknown card.
         case notRecognized
         case failed(String)
+
+        /// True once discovery has supplied a real identity (verified corpus, or
+        /// confident-but-unverified research). The "Sourced by Anomalous" link is
+        /// the provenance then, so the "knowledge map only" caption is dropped.
+        var identifiesProcess: Bool {
+            switch self {
+            case .sourced, .researched: return true
+            default: return false
+            }
+        }
     }
 
     struct JudgedAnomaly: Identifiable {
@@ -1323,6 +1333,21 @@ final class AppState {
         var card = anomalies[i].card
         card.whatItIs = researched.whatItIs
         card.confidenceNote = researched.confidenceNote
+        // The card was built as UNKNOWN (no corpus entry), so its whyItsProbablyHot
+        // and suggestedAction still assert "no identity / unknown process." Now that
+        // discovery has supplied an identity, refresh those two derived lines so the
+        // card reads coherently — a card must not say "No identity information
+        // available" directly above the identity it just fetched. Tier and the
+        // action BUTTON stay deterministic; we only rewrite the stale unknown
+        // fallback PROSE (never take research's whyItsProbablyHot, per above).
+        if card.whyItsProbablyHot == JudgmentEngine.unknownWhyHot {
+            card.whyItsProbablyHot = "This is running well above what's normal for this process."
+        }
+        if card.suggestedAction == JudgmentEngine.unknownAction {
+            card.suggestedAction = card.actionSafetyTier >= 3
+                ? "No one-click action here — it's safest to leave this process alone and let it settle."
+                : "No action needed; it should settle on its own."
+        }
         anomalies[i].card = card
         anomalies[i].discovery = resolved
         anomalies[i].discoverySources = assessment.sources

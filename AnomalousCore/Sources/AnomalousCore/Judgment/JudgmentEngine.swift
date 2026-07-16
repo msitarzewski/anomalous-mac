@@ -272,12 +272,20 @@ public struct JudgmentEngine: Sendable {
     /// Deterministic card from the knowledge map — already a complete
     /// diagnosis for known daemons ("dasd averaged 0.1% for 90 days; at
     /// 150% for 41h; safe to kill, launchd respawns it" needs zero LLM).
+    /// The `whyItsProbablyHot` / `suggestedAction` fallbacks a knowledge-map card
+    /// carries when the process is UNKNOWN (no corpus entry). Exposed so the
+    /// discovery merge can detect and replace them once an identity arrives —
+    /// otherwise the card shows "No identity information available" right above
+    /// the identity discovery just fetched.
+    public static let unknownWhyHot = "No identity information available; treat with caution."
+    public static let unknownAction = "No action offered for unknown processes."
+
     static func mapOnlyCard(anomaly: Anomaly, entry: KnowledgeEntry?, baselineSentence: String) -> DiagnosisCard {
         DiagnosisCard(
             whatItIs: entry?.whatItIs ?? "Unknown process — not in the knowledge map.",
-            whyItsProbablyHot: entry?.whenHotImplies ?? "No identity information available; treat with caution.",
+            whyItsProbablyHot: entry?.whenHotImplies ?? Self.unknownWhyHot,
             isThisNormal: baselineSentence,
-            suggestedAction: entry?.safeAction ?? "No action offered for unknown processes.",
+            suggestedAction: entry?.safeAction ?? Self.unknownAction,
             actionSafetyTier: entry?.safetyTier ?? 3,
             causallyLinkedProcesses: entry?.causallyLinked ?? [],
             isThisNormalVerdict: DiagnosisCard.NormalVerdict.uncertain.rawValue,

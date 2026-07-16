@@ -876,7 +876,11 @@ struct DiagnosisCardView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if !judged.judgedByModel {
+            // Provenance caption — but only while the card is still a bare
+            // knowledge-map entry. Once discovery has identified the process the
+            // "Sourced by Anomalous" link is the provenance, so drop the
+            // "knowledge map only" / AI-unavailable captions (they'd contradict it).
+            if !judged.judgedByModel && !judged.discovery.identifiesProcess {
                 if case .unavailable = AppleIntelligence.status {
                     Text("From the built-in knowledge map — turn on Apple Intelligence for richer diagnoses.")
                         .font(.callout).foregroundStyle(.secondary)
