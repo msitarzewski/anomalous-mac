@@ -63,7 +63,7 @@
       "additionalProperties": false,
       "properties": {
         "os_version": { "type": "string", "maxLength": 32, "description": "Marketing version, e.g. '27.0'. Never a build fingerprint." },
-        "hardware_class": { "type": "string", "maxLength": 32, "description": "Coarse bucket only (e.g. 'm4-pro', 'm5-max') — k-anonymity is enforced at ingestion; rare classes are bucketed to 'other'." },
+        "hardware_class": { "type": "string", "maxLength": 32, "description": "The raw hw.model identifier, lowercased (e.g. 'mac16,5') — never a serial or unique id. The server buckets it to a coarse class with k-anonymity at ingestion; rare models fall back to 'other'." },
         "thermal_pressure": { "type": ["string", "null"], "enum": ["nominal", "fair", "serious", "critical", null] }
       }
     },
