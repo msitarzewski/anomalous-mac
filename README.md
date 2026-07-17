@@ -171,6 +171,25 @@ Privileged helper (root) ─ fills root-owned gaps (XPC, Team-ID-pinned) ──�
 - Private Cloud Compute (tier 2) needs the app to carry Apple's PCC entitlement;
   without it, escalation simply stays on-device or waits for an explicit tap.
 
+## Why Apple Silicon only
+
+Not an oversight — a hardware line. The app's core is **on-device AI judgment**,
+which runs on Apple's **Foundation Models** and requires the **Neural Engine**
+found only on Apple Silicon. There is no Apple Intelligence on Intel Macs, so the
+headline feature — your Mac explaining itself, for free, with nothing leaving the
+machine — cannot exist there.
+
+Several of the signals are Apple-Silicon-specific too: **per-process GPU** (read
+from Apple's GPU), **Neural-Engine memory**, and the **P-core/E-core energy split**
+have no Intel equivalent.
+
+The runway is short regardless: **macOS 27 is Apple Silicon only**, so an Intel
+build could only ever target macOS 26 Tahoe on 2019–2020 Intel Macs — hardware
+Apple is already retiring. And it would be a *different, lesser* product:
+detection and the deterministic knowledge-corpus cards plus optional **paid
+cloud** triage, but no on-device AI and a reduced signal set. The full Anomalous
+experience is Apple Silicon by design.
+
 ## Building from source
 
 Developer setup, the build/sign/notarize pipeline, entitlements &

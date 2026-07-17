@@ -91,6 +91,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: bot.anomalous.sensor.widget
         SWIFT_VERSION: "6.0"
         MACOSX_DEPLOYMENT_TARGET: "26.0"
+        # Weak-link FoundationModels here too — the widget links AnomalousCore
+        # (which imports it), so it must never hard-fault on an incapable Mac.
+        OTHER_LDFLAGS: -weak_framework FoundationModels
         CODE_SIGN_IDENTITY: "-"
 
   Anomalous:
@@ -170,6 +173,12 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: bot.anomalous.sensor
         SWIFT_VERSION: "6.0"
         MACOSX_DEPLOYMENT_TARGET: "26.0"
+        # FoundationModels (Apple Intelligence) is WEAK-linked: the app must
+        # LAUNCH even on a Mac whose FoundationModels build lacks a symbol we
+        # reference (e.g. a @Generable card type's conformance) instead of dying
+        # in dyld with "Symbol not found." All use is @available/availability-
+        # gated, so a null symbol is never actually called on an incapable Mac.
+        OTHER_LDFLAGS: -weak_framework FoundationModels
         # Liquid Glass app icon (Icon Composer .icon in App/Resources) + the
         # menu-bar template imagesets both live in the asset catalog / resources.
         # actool composes the .icon named "AppIcon" into every required size.
