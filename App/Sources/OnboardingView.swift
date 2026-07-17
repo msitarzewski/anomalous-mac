@@ -26,6 +26,10 @@ struct OnboardingView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    if !AppleIntelligence.status.isAvailable {
+                        intelligenceNotice
+                        Divider()
+                    }
                     helperRow
                     Divider()
                     contributionRow
@@ -59,6 +63,35 @@ struct OnboardingView: View {
     }
 
     // MARK: Rows
+
+    /// Shown only when Apple Intelligence isn't usable on this Mac (ineligible
+    /// hardware, not enabled, or the model isn't ready). Anomalous still works —
+    /// detection, alerts, and knowledge-map cards — so this explains, honestly,
+    /// what's different and how to get the richer AI-composed diagnoses, instead
+    /// of leaving a user wondering why cards look generic.
+    private var intelligenceNotice: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "sparkles")
+                .font(.title2)
+                .foregroundStyle(.purple)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Apple Intelligence gives Anomalous its best diagnoses")
+                    .font(.headline)
+                if case .unavailable(let reason) = AppleIntelligence.status {
+                    Text(reason)
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Without it, cards come from the built-in knowledge map — still useful, just less specific. Detection, alerts, history, and everything else work exactly the same.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+    }
 
     private var helperRow: some View {
         settingRow(
