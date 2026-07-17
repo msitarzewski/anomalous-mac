@@ -1,7 +1,26 @@
 # Changelog
 
 All notable changes to the Anomalous macOS sensor. Dates are release dates;
-`0.2.1` (`CFBundleVersion` 7) is the latest release.
+`0.2.2` (`CFBundleVersion` 8) is the latest release.
+
+## 0.2.2 *(2026-07-17)*
+
+Crash fix + graceful degradation for Macs without Apple Intelligence.
+
+### Fixed
+- **Launch crash on some macOS 26.5.x Macs** ([#3](https://github.com/msitarzewski/anomalous-mac/issues/3)).
+  The app strong‑linked a FoundationModels symbol present only in newer
+  framework builds, so on 26.5.1/26.5.2 stable it aborted in dyld at launch
+  ("Symbol not found") before any code ran. FoundationModels is now **weak‑
+  linked**, so a missing symbol resolves to null at load instead of crashing;
+  all on‑device‑AI use was already availability‑gated, so nothing calls it on
+  an incapable Mac. Confirmed fixed on 26.5.1/26.5.2, no regression on macOS 27.
+
+### Added
+- **"Apple Intelligence recommended" notice.** When Apple Intelligence isn't
+  available, the Welcome window now explains — honestly — that diagnosis cards
+  come from the built‑in knowledge map and everything else works the same,
+  instead of leaving you wondering why cards look generic.
 
 ## 0.2.1 *(2026-07-15)*
 
