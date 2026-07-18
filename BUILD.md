@@ -28,6 +28,38 @@ The privileged helper requires a Developer ID signature to register as a system
 daemon; the reference signing + notarization + DMG pipeline is in [`tools/`](tools/)
 (secrets are read from the environment, never committed).
 
+## Cutting a release
+
+End-to-end checklist. Signing secrets come from `~/.config/anomalous/signing.env`
+(never committed); the EdDSA appcast key lives only in the login Keychain.
+
+1. **Bump the version** — `CFBundleShortVersionString` + `CFBundleVersion` in
+   `project.yml` (**both** the app and widget targets), then `xcodegen generate`.
+   Add a `CHANGELOG.md` entry.
+2. **Build → sign → notarize → DMG:**
+   ```
+   xcodebuild -project Anomalous.xcodeproj -scheme Anomalous -configuration Release clean build
+   source ~/.config/anomalous/signing.env
+   ./tools/sign.sh <Release/Anomalous.app>     # Developer ID (helper first, inside-out)
+   ./tools/notarize.sh <app>                   # notarytool + staple
+   ./tools/make-dmg.sh <app> dist/rel-X.Y.Z    # isolated dir → one clean appcast entry
+   ```
+3. **Appcast + publish to prod:**
+   ```
+   ./tools/sparkle-appcast.sh dist/rel-X.Y.Z   # EdDSA-signs the DMG
+   ./tools/publish-release.sh dist/rel-X.Y.Z/Anomalous-X.Y.Z.dmg dist/rel-X.Y.Z/appcast.xml
+   ```
+4. **Cut the GitHub release** — users expect the Releases tab:
+   ```
+   gh release create vX.Y.Z --title "Anomalous X.Y.Z" --latest \
+     --notes-file <changelog-section> dist/rel-X.Y.Z/Anomalous-X.Y.Z.dmg
+   ```
+5. **Bump the Homebrew cask** in [`msitarzewski/homebrew-tap`](https://github.com/msitarzewski/homebrew-tap):
+   set `version` + `sha256` (`shasum -a 256 dist/rel-X.Y.Z/Anomalous-X.Y.Z.dmg`) in
+   `Casks/anomalous.rb` and push. Installs as `brew install --cask msitarzewski/tap/anomalous`.
+
+> Steps 4–5 are the easy ones to forget — they were missing through 0.2.1.
+
 ## Backend server (optional)
 
 Cloud triage, anonymous contribution, and account/billing talk to a backend —
