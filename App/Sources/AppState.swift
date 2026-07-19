@@ -542,13 +542,19 @@ final class AppState {
         // enqueues; the app verifies every command against it before acting.
         _ = SharedSecret.key(createIfMissing: true)
 
+        // One App Attest identity per install, shared by both anonymous send
+        // paths: it registers a Secure-Enclave key on first use, then signs each
+        // request over its exact body (see AppAttestService).
+        let attestation = AppAttestService(baseURL: URL(string: server)!)
         ingestClient = IngestClient(
             baseURL: URL(string: server)!,
-            sendLog: SendLog(directory: sendLogDirectory)
+            sendLog: SendLog(directory: sendLogDirectory),
+            attestation: attestation
         )
         discoveryClient = DiscoveryClient(
             baseURL: URL(string: server)!,
-            sendLog: SendLog(directory: sendLogDirectory)
+            sendLog: SendLog(directory: sendLogDirectory),
+            attestation: attestation
         )
 
         // Notification actions (Snooze / Normal for me / Investigate) call

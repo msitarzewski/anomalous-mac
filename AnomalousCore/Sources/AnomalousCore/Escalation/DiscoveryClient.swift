@@ -20,10 +20,12 @@ import Foundation
 public struct DiscoveryClient: Sendable {
     public let baseURL: URL
     private let sendLog: SendLog
+    private let attestation: AttestationProviding?
 
-    public init(baseURL: URL, sendLog: SendLog) {
+    public init(baseURL: URL, sendLog: SendLog, attestation: AttestationProviding? = nil) {
         self.baseURL = baseURL
         self.sendLog = sendLog
+        self.attestation = attestation
     }
 
     public enum DiscoveryError: Error, Equatable { case server(Int), timedOut }
@@ -217,9 +219,9 @@ public struct DiscoveryClient: Sendable {
         req.httpBody = body
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        // TODO(App Attest): DCAppAttestService key + assertion headers.
-        req.setValue("dev-placeholder-key", forHTTPHeaderField: "X-Anomalous-Key-Id")
-        req.setValue(Data("placeholder".utf8).base64EncodedString(), forHTTPHeaderField: "X-Anomalous-Assertion")
+        for (header, value) in await attestationHeaders(for: body) {
+            req.setValue(value, forHTTPHeaderField: header)
+        }
 
         let (data, response) = try await URLSession.shared.data(for: req)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -237,6 +239,18 @@ public struct DiscoveryClient: Sendable {
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else { throw DiscoveryError.server(code) }
         return try Self.decodePoll(data)
+    }
+
+    /// Real App Attest headers over `body`, or the dev placeholder when no
+    /// provider is configured (unsigned CLI against a dev server).
+    private func attestationHeaders(for body: Data) async -> [String: String] {
+        if let attestation {
+            return await attestation.headers(for: body)
+        }
+        return [
+            "X-Anomalous-Key-Id": "dev-placeholder-key",
+            "X-Anomalous-Assertion": Data("placeholder".utf8).base64EncodedString(),
+        ]
     }
 
     // MARK: - Decoding (snake_case wire → typed)
