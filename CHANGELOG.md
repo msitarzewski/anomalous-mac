@@ -1,7 +1,21 @@
 # Changelog
 
 All notable changes to the Anomalous macOS sensor. Dates are release dates;
-`0.2.2` (`CFBundleVersion` 8) is the latest release.
+`0.2.3` (`CFBundleVersion` 9) is the latest release.
+
+## 0.2.3 *(2026-07-19)*
+
+Free-tier discovery now works in production.
+
+### Fixed
+- **Anonymous discovery + contribution now use real App Attest.** Every
+  anonymous request (identity discovery for an unknown process, and signature
+  contribution) previously carried a placeholder attestation, which the
+  fail-closed production API rejected — so free-tier discovery silently failed
+  ("Couldn't reach the service") for every shipped build. The app now performs
+  genuine `DCAppAttestService` attestation: it registers a Secure-Enclave key
+  once, then signs each request with a per-request assertion the server
+  verifies. No API posture was weakened to make this work.
 
 ## 0.2.2 *(2026-07-17)*
 
