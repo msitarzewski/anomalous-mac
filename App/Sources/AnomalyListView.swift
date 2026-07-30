@@ -571,7 +571,7 @@ struct DiagnosisCardView: View {
     /// the row, pinned right so the title truncates before it.
     private var titleRow: some View {
         HStack(alignment: .center, spacing: 7) {
-            tierIcon
+            attentionIcon
             HStack(spacing: 5) {
                 titleText
                     .font(.body.weight(.medium))
@@ -591,15 +591,10 @@ struct DiagnosisCardView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            // The verdict, demoted to a small quiet severity cue next to the
-            // name: a stack now differentiates by its observation, not by a
-            // repeated headline. Suppressed once resolved — the Resolved badge
-            // speaks for the card then.
-            if !judged.isResolved {
-                SeverityCue(urgency: judged.urgency)
-            }
-            // Controls reveal on hover so a resting card is just tier · name ·
-            // cue — a clean, scannable list. Details, ⋯ and × live here now.
+            // Urgency now lives in the leading icon's COLOR (+ its tooltip), so
+            // there's no separate text pill competing for the row.
+            // Controls reveal on hover so a resting card is just icon · name —
+            // a clean, scannable list. Details, ⋯ and × live here now.
             if isHovering, !judged.isResolved {
                 detailsToggle
                 if appState != nil { cardMenu }
@@ -626,33 +621,16 @@ struct DiagnosisCardView: View {
             : judged.anomaly.identity.executableName
     }
 
-    /// A single quiet, neutral leading marker in front of the name — the SAME on
-    /// every card, regardless of tier. Urgency is conveyed SOLELY by the exception
-    /// SeverityCue badge (none / amber / red), so this icon never competes with it:
-    /// a tier-1 "safe" shield or tier-2 warning next to a red badge was incoherent.
-    /// It's still a tap target for the tier explainer popover (which keeps the
-    /// tier's own color + word); action-safety is enforced at the action buttons.
-    private var tierIcon: some View {
-        Button { showingTierInfo = true } label: {
-            Image(systemName: "info.circle.fill")
-                .imageScale(.large)
-                .foregroundStyle(.secondary)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .popover(isPresented: $showingTierInfo, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 6) {
-                Label(tierStatusWord, systemImage: tierSymbol)
-                    .font(.headline).foregroundStyle(tierTint)
-                Text(tierDescription)
-                    .font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(14)
-            .frame(width: 260)
-        }
-        .help(tierStatusWord)
-        .accessibilityLabel("Status: \(tierRole)")
+    /// The leading marker, tinted by the level of attention the card wants:
+    /// gray = nothing unusual, amber = worth a look, red = needs a look. Hover
+    /// spells out the level. This IS the urgency signal — quiet by default,
+    /// colored only when it matters.
+    private var attentionIcon: some View {
+        Image(systemName: "info.circle.fill")
+            .imageScale(.large)
+            .foregroundStyle(urgencyTint(judged.urgency))
+            .help(urgencyTooltip(judged.urgency))
+            .accessibilityLabel(urgencyTooltip(judged.urgency))
     }
 
     /// Plain-language description of what the safety tier means, for the popover.
@@ -1371,7 +1349,26 @@ struct SeverityCue: View {
     }
 
     /// A softened system red — clearly "needs attention", never an alarm red.
-    private static let mutedRed = Color(red: 0.80, green: 0.29, blue: 0.26)
+    static let mutedRed = Color(red: 0.80, green: 0.29, blue: 0.26)
+}
+
+/// The leading icon's color = the level of attention the card wants. Gray by
+/// default (nothing unusual), amber for "worth a look", muted red for "needs a
+/// look". The color is the at-a-glance signal; the tooltip spells it out.
+func urgencyTint(_ urgency: UrgencyCue) -> Color {
+    switch urgency {
+    case .none: return .secondary
+    case .worthALook: return .orange
+    case .needsALook: return SeverityCue.mutedRed
+    }
+}
+
+func urgencyTooltip(_ urgency: UrgencyCue) -> String {
+    switch urgency {
+    case .none: return "Nothing unusual — this looks roughly normal for it."
+    case .worthALook: return "Worth a look — a notable change, but probably fine."
+    case .needsALook: return "Needs a look — this may want your attention."
+    }
 }
 
 // MARK: - Grouped instances
@@ -1425,12 +1422,13 @@ struct GroupedAnomalyCard: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center, spacing: 7) {
-                // The same quiet, neutral leading marker every card carries — so a
-                // group header aligns with single cards. Urgency lives only in the
-                // SeverityCue badge, never in a tier-colored icon.
+                // The leading marker, tinted by the group's attention level (+
+                // tooltip) — aligns with single cards; urgency lives in its color.
                 Image(systemName: "info.circle.fill")
                     .imageScale(.large)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(urgencyTint(representative.urgency))
+                    .help(urgencyTooltip(representative.urgency))
+                    .accessibilityLabel(urgencyTooltip(representative.urgency))
                 HStack(spacing: 5) {
                     Text(name)
                         .font(.body.weight(.medium))
@@ -1450,9 +1448,6 @@ struct GroupedAnomalyCard: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // The group's verdict as the same small severity cue the member
-                // cards use — not a repeated big headline.
-                SeverityCue(urgency: representative.urgency)
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
