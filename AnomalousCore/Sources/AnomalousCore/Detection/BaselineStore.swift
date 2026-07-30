@@ -17,8 +17,11 @@ public struct BaselineStats: Codable, Sendable {
     public var sentence: String {
         let days = Int(lastSeen.timeIntervalSince(firstSeen) / 86_400)
         let span = days >= 1 ? "over the last \(days) day\(days == 1 ? "" : "s")" : "so far"
-        let cpu = ewmaCPUPercent < 1 ? String(format: "%.1f%%", ewmaCPUPercent) : "\(Int(ewmaCPUPercent))%"
-        return "Normally uses about \(cpu) CPU and \(Int(ewmaRSSMB)) MB \(span)."
+        // Anchor to the whole machine — "% of your total processing power /
+        // memory" — the ceiling a person believes in, not the per-core figure.
+        let cpu = MachineLoad.approxPercent(MachineLoad.machineCPUPercent(perCorePercent: ewmaCPUPercent))
+        let mem = MachineLoad.approxPercent(MachineLoad.memoryPercent(megabytes: ewmaRSSMB))
+        return "Normally uses \(cpu) of your total processing power and \(mem) of your memory \(span)."
     }
 
     /// The baseline fact to ground the judgment layer with — or `nil` when it

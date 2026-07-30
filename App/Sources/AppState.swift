@@ -102,11 +102,56 @@ final class AppState {
         /// can only make the offer SAFER, never more aggressive.
         var action: ProcessAction {
             let deterministic = ProcessAction.offered(tier: card.actionSafetyTier, kind: anomaly.kind, isApp: isApp)
-            return ProcessAction.reconciled(
+            let reconciled = ProcessAction.reconciled(
                 llm: ProcessAction.from(safeAction: discoverySafeAction),
                 deterministic: deterministic
             )
+            // Never let a Quit/Restart button argue with a card that says "this
+            // looks fine" — demote a destructive offer to explain-only when the
+            // diagnosis is likely_normal and the server didn't explicitly ask
+            // for a quit (the Quit-contradiction).
+            return ProcessAction.reconciledWithVerdict(
+                reconciled,
+                isThisNormalVerdict: card.isThisNormalVerdict,
+                serverRequestedDestructive: ProcessAction.from(safeAction: discoverySafeAction)?.isDestructive ?? false
+            )
         }
+
+        /// The calm-expert headline shown as the card's focal line. Prefers the
+        /// verdict cached on the card; derives it on the fly (per-machine, from
+        /// the machine verdict + safety tier + confidence) when absent — so v1/v2
+        /// cached cards, which predate the field, still lead with a verdict.
+        var verdictHeadline: String {
+            let destructive = action.isDestructive
+            let headline = card.verdict.isEmpty
+                ? DiagnosisCard.deriveVerdict(
+                    isThisNormalVerdict: card.isThisNormalVerdict,
+                    actionSafetyTier: card.actionSafetyTier,
+                    confidence: anomaly.confidence,
+                    offeredActionIsDestructive: destructive
+                  )
+                : card.verdict
+            // A cached verdict predates this card's live action — discovery can
+            // add a destructive safe_action AFTER the headline was cached. Close
+            // the invariant at the point of render: a reassuring headline can
+            // never sit beside a Quit/Restart button.
+            if destructive && headline == DiagnosisCard.Verdict.looksFine {
+                return DiagnosisCard.Verdict.worthALook
+            }
+            return headline
+        }
+
+        /// The deterministic, whole-machine-% "what's happening" glance shown
+        /// under the verdict — composed from the anomaly, never the model, so
+        /// the anchored number ("about 8% of your total processing power") is
+        /// always right. Exact per-core figures live in the card's Details.
+        var glance: String { AppState.observation(for: anomaly) }
+        /// The EXCEPTION-based urgency cue for the title-row badge — driven by
+        /// MAGNITUDE (how far above this process's own baseline, and how much of
+        /// the whole machine it eats), not by the model's normal/abnormal
+        /// verdict. Silent in the common case: a card that merely ran above
+        /// baseline shows no badge (the card existing is already the heads-up).
+        var urgency: UrgencyCue { AppState.urgencyCue(for: anomaly, card: card, isGenuinelyUnknown: genuinelyUnknown) }
         /// Escalation earns its place when the local stack was thin: an
         /// unknown process, or an explain-only (tier-3) card. Known,
         /// confidently-actionable daemons don't need paid triage.
@@ -127,6 +172,30 @@ final class AppState {
     /// Account). Bound to the Settings `TabView` selection.
     enum SettingsTab: Hashable { case general, account, privacy, transparency, about }
     var settingsTab: SettingsTab = .general
+
+    /// Notification deep-link (mirrors the `settingsTab` idiom). Set to a
+    /// process-lineage key — `bundleID ?? executableName`, parsed from a
+    /// notification's `conditionKey` (`processKey|kind|dimension`) — when an
+    /// anomaly notification click (or Investigate) should reveal that live
+    /// anomaly in the home window's "Now" section. Its companion
+    /// `pendingHomeSection` (below) is what actually opens the window and names
+    /// the section; this only carries the Now scroll/highlight target. `HomeView`
+    /// scrolls to / highlights the matching card, then clears this back to nil so
+    /// a normal reopen never re-triggers and a repeat click of the same process
+    /// re-arms (nil → key is a real change). If the card already resolved and was
+    /// pruned (empty Now), `HomeView` still clears this key on the empty path so
+    /// it can never hijack a later manual open nor block a repeat click.
+    var pendingHomeSelection: String? = nil
+
+    /// Companion window-open trigger + SECTION hint for a notification deep-link.
+    /// The delegate is non-UI and can't open a window, so it sets this; an
+    /// App-scope observer (StatusLabel) opens the home window on any non-nil
+    /// value, and `HomeView` switches to the named section then clears it (nil →
+    /// section is a real change, so a repeat click of the same notification
+    /// re-arms). An anomaly click routes to `.now` (paired with a
+    /// `pendingHomeSelection` scroll target); a resolution click routes to
+    /// `.history`, where the journaled entry lives, with no Now selection.
+    var pendingHomeSection: HomeView.Section? = nil
 
     /// Result of attempting an action, surfaced transiently in the card.
     enum ActionResult: Equatable { case done, needsSudo(String), gone, identityChanged, failed }
@@ -1140,6 +1209,14 @@ final class AppState {
         if let expert = await baselineStore.cachedExpertResult(processKey: processKey, kind: anomaly.kind) {
             judged.escalation = .completed(expert)   // you paid once — keep the answer
         }
+        // Stamp the DERIVED verdict onto the card so the persisted cache carries
+        // the headline. Force-derive (don't trust any string the model emitted
+        // into `verdict` despite the instruction) — the verdict is ours to set.
+        judged.card.verdict = DiagnosisCard.deriveVerdict(
+            isThisNormalVerdict: judged.card.isThisNormalVerdict,
+            actionSafetyTier: judged.card.actionSafetyTier,
+            confidence: anomaly.confidence
+        )
         await baselineStore.cacheDiagnosis(
             CachedDiagnosis(card: judged.card, kind: anomaly.kind, judgedByModel: judged.judgedByModel),
             processKey: processKey, kind: anomaly.kind
@@ -1160,11 +1237,19 @@ final class AppState {
             if case .upgraded(let better) = await engine.pccUpgrade(
                 anomaly, baselineSentence: baseline, context: context, baseCard: baseCard
             ) {
+                var upgraded = better
+                // Re-derive the verdict for the upgraded card (its `verdict` is
+                // generated, not authoritative) before it's shown/cached.
+                upgraded.verdict = DiagnosisCard.deriveVerdict(
+                    isThisNormalVerdict: upgraded.isThisNormalVerdict,
+                    actionSafetyTier: upgraded.actionSafetyTier,
+                    confidence: anomaly.confidence
+                )
                 if let i = self.anomalies.firstIndex(where: { $0.id == judgedID }) {
-                    self.anomalies[i].card = better
+                    self.anomalies[i].card = upgraded
                 }
                 await self.baselineStore.cacheDiagnosis(
-                    CachedDiagnosis(card: better, kind: anomaly.kind, judgedByModel: true),
+                    CachedDiagnosis(card: upgraded, kind: anomaly.kind, judgedByModel: true),
                     processKey: processKey, kind: anomaly.kind
                 )
             }
@@ -2026,11 +2111,50 @@ final class AppState {
     /// A plain-English statement of the observed deviation — the "so what,"
     /// with durations in human units (hours/days) and no internal rule names.
     /// "3 hours" / "1 hour" / "2 days" — honours singular vs plural.
-    private static func plural(_ n: Int, _ unit: String) -> String {
+    nonisolated private static func plural(_ n: Int, _ unit: String) -> String {
         "\(n) \(unit)\(n == 1 ? "" : "s")"
     }
 
-    private static func observation(for anomaly: Anomaly) -> String {
+    /// Compose the magnitude inputs for the title-row urgency cue and classify.
+    /// Pure (a function of the anomaly + its card), so `JudgedAnomaly.urgency`
+    /// can read it off the main actor. `ratioAboveNormal` divides the current
+    /// reading by the process's OWN baseline (nil when there's none);
+    /// `resourceSharePercent` is the whole-machine share for the kinds that have
+    /// one (CPU / memory / GPU), nil otherwise (e.g. a lifetime cputime-ratio).
+    /// `isGenuinelyUnknown` (from the JudgedAnomaly) caps an UNRECOGNIZED process
+    /// at amber — its tier-3 is the unknown default, not a corpus red verdict.
+    nonisolated static func urgencyCue(for anomaly: Anomaly, card: DiagnosisCard, isGenuinelyUnknown: Bool) -> UrgencyCue {
+        let current = anomaly.magnitudeCurve.last ?? 0
+        let ratio: Double? = {
+            guard let base = anomaly.baselineValue, base > 0 else { return nil }
+            return current / base
+        }()
+        let share: Double?
+        switch anomaly.kind {
+        case .sustainedCPU:
+            share = MachineLoad.machineCPUPercent(perCorePercent: current)
+        case .rssCeiling, .rssLeak, .memoryLeakFootprint:
+            share = MachineLoad.memoryPercent(megabytes: current)
+        case .gpuSaturation:
+            share = min(100, current)
+        default:
+            share = nil
+        }
+        return UrgencyCue.classify(
+            ratioAboveNormal: ratio,
+            resourceSharePercent: share,
+            verdict: DiagnosisCard.NormalVerdict(rawValue: card.isThisNormalVerdict) ?? .uncertain,
+            tier: card.actionSafetyTier,
+            lowConfidence: anomaly.confidence.level == .low,
+            isFrozenApp: anomaly.kind == .appHung,
+            isThermal: anomaly.identity.executableName == "kernel_task",
+            isGenuinelyUnknown: isGenuinelyUnknown
+        )
+    }
+
+    // nonisolated: a pure function of the anomaly, safe to compose the glance
+    // from any context (JudgedAnomaly.glance is used off the main actor).
+    nonisolated private static func observation(for anomaly: Anomaly) -> String {
         let hours = anomaly.windowSeconds / 3600
         let duration: String
         if hours >= 48 { duration = "for \(plural(Int(hours / 24), "day"))" }
@@ -2043,14 +2167,56 @@ final class AppState {
                                   : "for \(plural(max(1, secs), "second"))"
         }
         let current = anomaly.magnitudeCurve.last ?? 0
+        // A just-flagged anomaly hasn't been going long enough for its duration
+        // to be the story — never say "non-stop for 1 second". Only cite a
+        // duration once it's actually sustained (≥ a minute).
+        let durationIsMeaningful = anomaly.windowSeconds >= 60
 
         switch anomaly.kind {
-        case .cpuTimeRatio, .sustainedCPU:
-            return "It has now been running at about \(Int(current))% CPU \(duration)."
-        case .rssLeak:
-            return "Its memory has been climbing \(duration), now about \(Int(current)) MB."
+        case .sustainedCPU:
+            // Anchor to a ceiling the user believes in — "% of your total
+            // processing power", not the per-core figure Activity Monitor
+            // shows — and let the shape pick the phrasing (spike / sustained /
+            // near-zero baseline). See MachineGlance + GitHub #2.
+            let cur = MachineLoad.machineCPUPercent(perCorePercent: current)
+            let base = anomaly.baselineValue.map { MachineLoad.machineCPUPercent(perCorePercent: $0) }
+            // "Near zero" for a per-core metric means the process's own baseline
+            // is a tiny sliver of a single core (<~1% per-core) — NOT 0.5% of
+            // the whole machine, which on a many-core Mac wrongly flattens real
+            // spikes on low-share processes. Convert 1%/core into this machine's
+            // share so a modest 4%→40% per-core spike still reads as a spike.
+            let nearZero = MachineLoad.machineCPUPercent(perCorePercent: 1)
+            return "It's using " + MachineGlance.sentence(
+                resource: .processor, currentMachinePercent: cur,
+                baselineMachinePercent: base ?? cur, duration: duration,
+                durationIsMeaningful: durationIsMeaningful,
+                nearZeroPercent: nearZero
+            ) + "."
+        case .cpuTimeRatio:
+            // A LIFETIME-average cpu-time fraction (cputime ÷ uptime), NOT an
+            // instantaneous per-core load — so it's phrased as a long-run
+            // average and never dressed up as "% of your machine right now".
+            return "Over its whole run it has averaged about \(Int(current.rounded()))% processor use — a lifetime figure, not its load right now, and well above what this kind of process usually needs."
+        case .rssLeak, .memoryLeakFootprint:
+            let cur = MachineLoad.memoryPercent(megabytes: current)
+            let base = anomaly.baselineValue.map { MachineLoad.memoryPercent(megabytes: $0) }
+            // Only cite how long it's been climbing once that's actually a story;
+            // a fresh flag just reads "its memory is climbing", present tense.
+            let lead = durationIsMeaningful ? "Its memory has been climbing \(duration) — now "
+                                            : "Its memory is climbing — now "
+            return lead + MachineGlance.sentence(
+                resource: .memory, currentMachinePercent: cur,
+                baselineMachinePercent: base ?? cur, duration: duration,
+                durationIsMeaningful: durationIsMeaningful
+            ) + "."
         case .rssCeiling:
-            return "It is using about \(Int(current)) MB of memory, far above what's expected."
+            let cur = MachineLoad.memoryPercent(megabytes: current)
+            let base = anomaly.baselineValue.map { MachineLoad.memoryPercent(megabytes: $0) }
+            return "It's using " + MachineGlance.sentence(
+                resource: .memory, currentMachinePercent: cur,
+                baselineMachinePercent: base ?? cur, duration: duration,
+                durationIsMeaningful: durationIsMeaningful
+            ) + "."
         case .novelProcess:
             return "This process is new and unrecognized, and it's using significant resources."
         case .appHung:
@@ -2058,15 +2224,21 @@ final class AppState {
             let howLong = secs < 90 ? "for about \(plural(secs, "second"))" : "for about \(plural(secs / 60, "minute"))"
             return "It has stopped responding to input — unresponsive \(howLong)."
         case .energyWakeups:
-            return "It is waking the processor about \(Int(current)) times a second \(duration) — the busy-wait pattern that quietly drains the battery."
+            // Terse and differentiating: the wake-up rate is the story. The
+            // longer "busy-wait pattern" explanation is dropped from the
+            // always-visible line so a stack of these doesn't repeat verbatim.
+            return "It's waking the processor about \(Int(current)) times a second \(duration) — draining the battery."
         case .diskThrash:
-            return "It has been reading and writing about \(Int(current)) MB per second of disk \(duration), far above its usual."
-        case .memoryLeakFootprint:
-            return "Its memory footprint has been climbing steadily \(duration), now about \(Int(current)) MB."
+            return "It has been reading and writing about \(Int(current)) MB per second of disk \(duration) — well above its usual."
         case .gpuSaturation:
-            return "It has been using about \(Int(current))% of the GPU \(duration), far above its usual."
+            // GPU utilization can report above 100% (summed engines), but "338%
+            // of the GPU" reads as broken — clamp to the believable ceiling, and
+            // once it's maxed just say so.
+            let gpu = Int(min(100, max(0, current)).rounded())
+            let usage = gpu >= 95 ? "nearly all of the GPU" : "about \(gpu)% of the GPU"
+            return "It has been using \(usage) \(duration) — far more than it usually needs."
         case .networkThroughput:
-            return "It has been moving about \(Int(current)) MB per second over the network \(duration), far above its usual."
+            return "It has been moving about \(Int(current)) MB per second over the network \(duration) — more than its usual."
         }
     }
 

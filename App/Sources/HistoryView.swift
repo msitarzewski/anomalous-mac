@@ -39,7 +39,6 @@ struct HistoryView: View {
             }
         }
         .frame(minWidth: 460, minHeight: 360)
-        .navigationTitle("History")
         .task { await load() }
     }
 

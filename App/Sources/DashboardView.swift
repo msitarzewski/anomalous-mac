@@ -43,16 +43,15 @@ struct DashboardView: View {
         }
         // Content dissolves under the Liquid Glass toolbar instead of hard-clipping.
         .scrollEdgeEffectStyle(.soft, for: .top)
+        // The count line rides the titlebar subtitle rather than sitting in-content.
+        .navigationSubtitle(subtitle(digest))
     }
 
     // MARK: header + range
 
     private func header(_ digest: AnomalyDigest) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Overview").font(.title2).fontWeight(.semibold)
-                Text(subtitle(digest)).font(.caption).foregroundStyle(.secondary)
-            }
+            Text("Overview").font(.title2).fontWeight(.semibold)
             Spacer()
             Picker("Range", selection: $rangeRaw) {
                 ForEach(HistoryRange.allCases) { Text($0.label).tag($0.rawValue) }

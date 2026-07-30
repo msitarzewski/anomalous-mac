@@ -21,6 +21,7 @@ import AnomalousCore
 @MainActor
 final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     static let anomalyCategoryID = "ANOMALY"
+    static let resolutionCategoryID = "RESOLUTION"
     static let investigateActionID = "INVESTIGATE"
     static let snoozeActionID = "SNOOZE_1H"
     static let normalActionID = "NORMAL_FOR_ME"
@@ -47,7 +48,15 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
             ],
             intentIdentifiers: []
         )
-        center.setNotificationCategories([category])
+        // Resolutions carry no custom actions, but they get their own category
+        // so a click can be told apart from an anomaly click in the delegate and
+        // routed to History (where the journaled entry is), not the live Now pane.
+        let resolution = UNNotificationCategory(
+            identifier: Self.resolutionCategoryID,
+            actions: [],
+            intentIdentifiers: []
+        )
+        center.setNotificationCategories([category, resolution])
     }
 
     /// A short, plain-English label for the anomaly kind — for the notification
@@ -107,6 +116,8 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         content.interruptionLevel = .passive
         content.sound = nil
         content.threadIdentifier = processName
+        // So a click lands in History, not the live Now pane (see the delegate).
+        content.categoryIdentifier = Self.resolutionCategoryID
 
         try? await center.add(UNNotificationRequest(
             identifier: UUID().uuidString,
@@ -129,6 +140,9 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     ) async {
         let action = response.actionIdentifier
         let conditionKey = response.notification.request.content.userInfo["conditionKey"] as? String
+        // Read every Sendable field off `response` HERE — it isn't Sendable, so
+        // it can't cross into the MainActor.run closure below (data-race check).
+        let category = response.notification.request.content.categoryIdentifier
         await MainActor.run {
             switch action {
             case Self.snoozeActionID:
@@ -136,9 +150,28 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
             case Self.normalActionID:
                 if let conditionKey { onAcknowledgeCondition?(conditionKey) }
             case Self.investigateActionID, UNNotificationDefaultActionIdentifier:
-                // Bring the menu-bar app forward; the popover itself has no
-                // public open API — the lit status item is the affordance.
-                NSApp.activate(ignoringOtherApps: true)
+                // A plain click (or Investigate) leads to the app's real home.
+                // The delegate is non-UI and can't call openWindow — mirror the
+                // `settingsTab` deep-link idiom: set an AppState property; an
+                // App-scope observer (StatusLabel) opens the home window on the
+                // `pendingHomeSection` change; `HomeView` switches to that section.
+                if category == Self.resolutionCategoryID {
+                    // Resolution: the item now lives in History, not Now — route
+                    // there, with no Now selection (an empty key on Now would just
+                    // land on "You're all clear," which is wrong for a resolution).
+                    AppState.shared.pendingHomeSection = .history
+                } else {
+                    // Anomaly: reveal the live card in Now. The process-lineage
+                    // key is the conditionKey's first field
+                    // (processKey|kind|dimension); set the scroll target first,
+                    // then the section (the window-open trigger) so the target is
+                    // in place when Now appears.
+                    let processKey = conditionKey?
+                        .split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+                        .first.map(String.init) ?? ""
+                    AppState.shared.pendingHomeSelection = processKey
+                    AppState.shared.pendingHomeSection = .now
+                }
             default:
                 break
             }

@@ -87,7 +87,7 @@ struct Phase3LiveModelTests {
         #expect(fitInstructions == instructions)
     }
 
-    @Test("live grounded card quotes the driving-metric number and does NOT call the busy-poll normal")
+    @Test("live grounded card is verdict-first (language-only) and does NOT call the busy-poll normal")
     func groundedBusyPollCard() async throws {
         guard Self.modelIsAvailable else { return }
         let map = try KnowledgeMap.shipped()
@@ -102,24 +102,19 @@ struct Phase3LiveModelTests {
             return
         }
 
-        // The card must reference the driving metric's number — loose digit
-        // match ("1400", tolerating "1,400" / "1.400" grouping re-rolls).
-        let allText = [card.whatItIs, card.whyItsProbablyHot, card.isThisNormal, card.confidenceNote]
-            .joined(separator: " ")
-        let normalized = allText
-            .replacingOccurrences(of: ",", with: "")
-            .replacingOccurrences(of: ".400", with: "400")
-        #expect(
-            normalized.contains("1400") || normalized.contains("1398") || normalized.contains("1402"),
-            "card never quotes the ~1400/s figure it was given: \(allText)"
-        )
-
-        // THE regression: grounded, this must not come back "normal".
+        // Verdict-first (Phase 1): the card must still be GROUNDED — it read the
+        // busy-poll rate and judged it — but the raw figure now lives in the
+        // app's Details readout, not the prose. So the grounding guard is the
+        // VERDICT (not the number in the text): grounded, this must not come
+        // back "normal", and it must carry a confidence note explaining the call.
         #expect(
             card.isThisNormalVerdict != DiagnosisCard.NormalVerdict.likelyNormal.rawValue,
             "grounded busy-poll verdict regressed to likely_normal — the ungrounded failure is back"
         )
         #expect(!card.confidenceNote.isEmpty)
+        // Language-only headline field: isThisNormal is a plain "how far from
+        // normal" sentence now, not a numeric readout — keep it non-empty.
+        #expect(!card.isThisNormal.isEmpty)
         print("[phase3-live] verdict=\(card.isThisNormalVerdict) note=\(card.confidenceNote)")
         print("[phase3-live] isThisNormal=\(card.isThisNormal)")
     }

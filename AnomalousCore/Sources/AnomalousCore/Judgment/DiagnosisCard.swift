@@ -22,10 +22,10 @@ public struct DiagnosisCard: Sendable {
     @Guide(description: "What this process is and does — thorough but plain, 1-2 sentences a non-technical person understands. Keep the useful detail; ground it in the knowledge-map entry; never invent identity.")
     public var whatItIs: String
 
-    @Guide(description: "In plain, non-technical English, what is most likely happening and why — the 'what this means' that helps an ordinary person understand the situation. One or two short sentences, grounded in the knowledge map's whenHotImplies and QUOTING the observed numbers you were given (e.g. '1400 wakeups per second'). No jargon.")
+    @Guide(description: "In plain, non-technical English, what is most likely happening and why — the 'what this means' that helps an ordinary person understand the situation. Lead with the plain situation, not raw figures: describe the behaviour in words (e.g. 'It's stuck retrying a background task') rather than quoting exact CPU/memory numbers — the app shows those separately in Details. One or two short sentences, grounded in the knowledge map's whenHotImplies. No jargon.")
     public var whyItsProbablyHot: String
 
-    @Guide(description: "State what's normal for this process versus what's happening now, using the observed numbers (e.g. 'Normally about 0.1% CPU; now around 150% for 41 hours'). One line. No rule names or window sizes in minutes.")
+    @Guide(description: "One short, calm sentence on whether this is normal for this process and roughly how far from normal it is, in plain words ('far above what's usual for it', 'a little higher than usual'). Do NOT quote exact percentages, megabytes, or minute-counts here — the app renders the precise figures in Details. No rule names.")
     public var isThisNormal: String
 
     @Guide(description: "The recommended action as a verb phrase (e.g. 'Update Chrome', 'Restart the app', 'Safe to kill — launchd respawns it'). The safest immediate action if no specific fix is known.")
@@ -43,6 +43,15 @@ public struct DiagnosisCard: Sendable {
     @Guide(description: "One short sentence on how sure this diagnosis is and what it rests on, quoting the detector's confidence you were given (e.g. 'High confidence: two independent signals agree and the rate is far above its recorded baseline').")
     public var confidenceNote: String
 
+    /// The plain-English headline verdict shown as the card's focal line
+    /// ("This looks fine" / "Worth a look" / "This needs a look"). Derived
+    /// CLIENT-SIDE from `isThisNormalVerdict` + `actionSafetyTier` + confidence
+    /// (see `deriveVerdict`) — per-machine, so it never belonged in the shared
+    /// corpus. Additive: cached v1/v2 cards decode it as "" and the view
+    /// derives on the fly.
+    @Guide(description: "Always output an empty string here. The app writes the plain-English verdict headline itself from the detector's judgment; do not compose one.")
+    public var verdict: String
+
     /// v1 six-field init, byte-compatible for cache/back-compat — cached v1
     /// diagnoses reconstruct through this and get honest defaults for the
     /// additive Phase-3 fields.
@@ -56,7 +65,9 @@ public struct DiagnosisCard: Sendable {
     }
 
     /// Full init (the @Generable macro doesn't expose a public memberwise init).
-    public init(whatItIs: String, whyItsProbablyHot: String, isThisNormal: String, suggestedAction: String, actionSafetyTier: Int, causallyLinkedProcesses: [String], isThisNormalVerdict: String, confidenceNote: String) {
+    /// `verdict` defaults to "" so every existing caller keeps compiling; it's
+    /// set client-side once the derivation inputs are known.
+    public init(whatItIs: String, whyItsProbablyHot: String, isThisNormal: String, suggestedAction: String, actionSafetyTier: Int, causallyLinkedProcesses: [String], isThisNormalVerdict: String, confidenceNote: String, verdict: String = "") {
         self.whatItIs = whatItIs
         self.whyItsProbablyHot = whyItsProbablyHot
         self.isThisNormal = isThisNormal
@@ -65,6 +76,7 @@ public struct DiagnosisCard: Sendable {
         self.causallyLinkedProcesses = causallyLinkedProcesses
         self.isThisNormalVerdict = isThisNormalVerdict
         self.confidenceNote = confidenceNote
+        self.verdict = verdict
     }
 }
 
@@ -87,6 +99,8 @@ public struct DiagnosisCard: Sendable, Codable {
     public var causallyLinkedProcesses: [String]
     public var isThisNormalVerdict: String
     public var confidenceNote: String
+    /// Plain-English headline verdict, derived client-side (see `deriveVerdict`).
+    public var verdict: String
 
     public init(whatItIs: String, whyItsProbablyHot: String, isThisNormal: String, suggestedAction: String, actionSafetyTier: Int, causallyLinkedProcesses: [String]) {
         self.init(
@@ -97,7 +111,7 @@ public struct DiagnosisCard: Sendable, Codable {
         )
     }
 
-    public init(whatItIs: String, whyItsProbablyHot: String, isThisNormal: String, suggestedAction: String, actionSafetyTier: Int, causallyLinkedProcesses: [String], isThisNormalVerdict: String, confidenceNote: String) {
+    public init(whatItIs: String, whyItsProbablyHot: String, isThisNormal: String, suggestedAction: String, actionSafetyTier: Int, causallyLinkedProcesses: [String], isThisNormalVerdict: String, confidenceNote: String, verdict: String = "") {
         self.whatItIs = whatItIs
         self.whyItsProbablyHot = whyItsProbablyHot
         self.isThisNormal = isThisNormal
@@ -106,6 +120,7 @@ public struct DiagnosisCard: Sendable, Codable {
         self.causallyLinkedProcesses = causallyLinkedProcesses
         self.isThisNormalVerdict = isThisNormalVerdict
         self.confidenceNote = confidenceNote
+        self.verdict = verdict
     }
 
     public init(from decoder: Decoder) throws {
@@ -118,6 +133,7 @@ public struct DiagnosisCard: Sendable, Codable {
         causallyLinkedProcesses = try c.decode([String].self, forKey: .causallyLinkedProcesses)
         isThisNormalVerdict = try c.decodeIfPresent(String.self, forKey: .isThisNormalVerdict) ?? NormalVerdict.uncertain.rawValue
         confidenceNote = try c.decodeIfPresent(String.self, forKey: .confidenceNote) ?? ""
+        verdict = try c.decodeIfPresent(String.self, forKey: .verdict) ?? ""
     }
 }
 
@@ -141,6 +157,9 @@ public struct CachedDiagnosis: Codable, Sendable {
     /// Phase-3 additive fields — absent in v1 caches, defaulted on decode.
     public let isThisNormalVerdict: String
     public let confidenceNote: String
+    /// Additive: the derived plain-English verdict headline (absent in v1/v2
+    /// caches → "" on decode, re-derived by the view).
+    public let verdict: String
 
     public init(card: DiagnosisCard, kind: Anomaly.Kind, judgedByModel: Bool) {
         whatItIs = card.whatItIs
@@ -153,6 +172,7 @@ public struct CachedDiagnosis: Codable, Sendable {
         self.judgedByModel = judgedByModel
         isThisNormalVerdict = card.isThisNormalVerdict
         confidenceNote = card.confidenceNote
+        verdict = card.verdict
     }
 
     public init(from decoder: Decoder) throws {
@@ -168,6 +188,7 @@ public struct CachedDiagnosis: Codable, Sendable {
         isThisNormalVerdict = try c.decodeIfPresent(String.self, forKey: .isThisNormalVerdict)
             ?? DiagnosisCard.NormalVerdict.uncertain.rawValue
         confidenceNote = try c.decodeIfPresent(String.self, forKey: .confidenceNote) ?? ""
+        verdict = try c.decodeIfPresent(String.self, forKey: .verdict) ?? ""
     }
 
     public var card: DiagnosisCard {
@@ -175,7 +196,62 @@ public struct CachedDiagnosis: Codable, Sendable {
             whatItIs: whatItIs, whyItsProbablyHot: whyItsProbablyHot,
             isThisNormal: isThisNormal, suggestedAction: suggestedAction,
             actionSafetyTier: actionSafetyTier, causallyLinkedProcesses: causallyLinkedProcesses,
-            isThisNormalVerdict: isThisNormalVerdict, confidenceNote: confidenceNote
+            isThisNormalVerdict: isThisNormalVerdict, confidenceNote: confidenceNote,
+            verdict: verdict
         )
+    }
+}
+
+extension DiagnosisCard {
+    /// The three calm-expert headline strings — the single source of truth so
+    /// the derivation and any invariant check compare against the same words.
+    public enum Verdict {
+        public static let looksFine = "This looks fine"
+        public static let worthALook = "Worth a look"
+        public static let needsALook = "This needs a look"
+    }
+
+    /// The client-side verdict derivation — pure, per-machine, unit-testable.
+    /// Turns the machine verdict (`isThisNormalVerdict`) into the calm-expert
+    /// headline, gated so it can never contradict corpus severity:
+    ///
+    ///   likely_normal  → "This looks fine"
+    ///   uncertain      → "Worth a look"
+    ///   likely_abnormal→ "This needs a look"
+    ///
+    /// CONSISTENCY GATE — a never-normal-when-hot process can never be told
+    /// "This looks fine". Safety tier ≥ 3 is exactly that population: the
+    /// corpus marks databases, kernel_task and unknown processes explain-only
+    /// because a hot one is never routine. Such a card is demoted to "Worth a
+    /// look" even when the model read the baseline as normal. Thin evidence
+    /// (low confidence) is held to the same bar — it never earns full
+    /// reassurance, and a low-confidence abnormal call softens to "Worth a
+    /// look" rather than shouting.
+    ///
+    /// The SAME gate closes on the offered action: a destructive primary
+    /// button (Quit/Restart) can NEVER sit beside a reassuring headline. When
+    /// the effective action is destructive — including the self-contradictory
+    /// server response that pairs likely_normal with safe_action=quit — full
+    /// reassurance is off the table and the headline softens to "Worth a look".
+    /// Headline and action are thus derived from one consistent source and can
+    /// never diverge.
+    public static func deriveVerdict(
+        isThisNormalVerdict raw: String,
+        actionSafetyTier tier: Int,
+        confidence: Confidence,
+        offeredActionIsDestructive destructive: Bool = false
+    ) -> String {
+        // Tier ≥ 3 = never-normal-when-hot, thin evidence, OR a destructive
+        // button offered: in every case "this looks fine" is off the table.
+        let reassuranceAllowed = tier < 3 && confidence.level != .low && !destructive
+
+        switch NormalVerdict(rawValue: raw) ?? .uncertain {
+        case .likelyNormal:
+            return reassuranceAllowed ? Verdict.looksFine : Verdict.worthALook
+        case .uncertain:
+            return Verdict.worthALook
+        case .likelyAbnormal:
+            return confidence.level == .low ? Verdict.worthALook : Verdict.needsALook
+        }
     }
 }

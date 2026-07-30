@@ -80,6 +80,26 @@ public enum ProcessAction: Sendable, Equatable {
         guard let llm else { return deterministic }
         return llm.aggression <= deterministic.aggression ? llm : deterministic
     }
+
+    /// Final guard so the offered button never argues with the card's own
+    /// prose. When the diagnosis reads "this is fine" (`likely_normal`) and the
+    /// server didn't explicitly ask for a quit, a destructive action is demoted
+    /// to explain-only — a card can't show a Quit button beside words that say
+    /// there's no need to quit this (the reported Quit-contradiction). Guidance
+    /// that points elsewhere already arrives as `safe_action == none` →
+    /// `explainOnly` via `reconciled`, so this only has to catch the
+    /// verdict-vs-button mismatch the deterministic tier can't see.
+    public static func reconciledWithVerdict(
+        _ action: ProcessAction,
+        isThisNormalVerdict verdict: String,
+        serverRequestedDestructive: Bool
+    ) -> ProcessAction {
+        guard action.isDestructive,
+              !serverRequestedDestructive,
+              verdict == DiagnosisCard.NormalVerdict.likelyNormal.rawValue
+        else { return action }
+        return .explainOnly
+    }
 }
 
 /// Executes actions on user-owned / launchd-respawned processes only.

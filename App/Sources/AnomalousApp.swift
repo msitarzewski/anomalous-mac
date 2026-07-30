@@ -35,11 +35,15 @@ struct AnomalousApp: App {
         .windowResizability(.contentSize)
         .defaultPosition(.center)
 
-        Window("Anomaly History", id: "history") {
-            HistoryWindow(appState: appState)
+        // The app's window "home" — sidebar shell (Now · History · Insights · Sent).
+        // Keeps id "history" so the existing openers (the popover gear menu,
+        // Settings, and the notification deep-link) still target it. Opens as an
+        // accessory window (no Dock icon) — the app stays a quiet menu-bar app.
+        Window("Anomalous", id: "history") {
+            HomeView(appState: appState)
         }
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 660, height: 560)
+        .defaultSize(width: 940, height: 660)
     }
 }
 
@@ -76,6 +80,19 @@ private struct StatusLabel: View {
                 // app — bring the welcome window forward so it isn't missed.
                 NSApp.activate(ignoringOtherApps: true)
             }
+        }
+        // Notification deep-link observer. StatusLabel is the MenuBarExtra label —
+        // it lives for the app's lifetime and already holds `openWindow`, so it's
+        // the app-scope surface that turns the delegate's `pendingHomeSection`
+        // into an actual window open (the delegate is non-UI and can't). Keys on
+        // the section hint so BOTH an anomaly (→ Now) and a resolution (→ History)
+        // click open the window. Opening id "history" refocuses it if it's already
+        // open; HomeView's own onChange then switches to the section and (for Now)
+        // drives the scroll/selection. Mirrors the welcome-window open above.
+        .onChange(of: appState.pendingHomeSection) { _, newValue in
+            guard newValue != nil else { return }
+            openWindow(id: "history")
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 }

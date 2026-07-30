@@ -311,6 +311,15 @@ struct DiagnosisCardView: View {
     /// sits on the group's shared background, and defer the verdict/insight to
     /// Details so a member collapses to a single row.
     var embedded: Bool = false
+    /// Whether tapping a source/expert link dismisses the enclosing surface. TRUE
+    /// in the floating menu-bar popover — the panel floats high, so a link's own
+    /// UI (a browser, Choosy) would open behind it; getting out of the way fixes
+    /// the hand-off. FALSE in a normal Window, where `dismiss()` would close the
+    /// whole window on every link tap; there we just open the URL in place.
+    var dismissesOnLinkTap: Bool = true
+    /// Whether a tap anywhere on the card body toggles the Details disclosure.
+    /// TRUE everywhere today; a host that drives its own selection can turn it off.
+    var tapToExpand: Bool = true
     @State private var isHovering = false
     @State private var confirming = false
     @State private var confirmingAck = false
@@ -337,7 +346,7 @@ struct DiagnosisCardView: View {
     private func sourceLink(_ url: String, _ note: String, font: Font) -> some View {
         Button {
             openURL(URL(string: url) ?? URL(string: "https://anomalous.bot")!)
-            dismiss()
+            if dismissesOnLinkTap { dismiss() }
         } label: {
             Label(note, systemImage: "link").font(font)
         }
@@ -364,26 +373,22 @@ struct DiagnosisCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            titleRow                    // process name (full width) · dismiss ×
-            // A group member collapses to just its title row — the shared verdict
-            // is already in the group header — and reveals its own verdict/insight
-            // only when expanded. A standalone card shows them up front as before.
-            if !embedded {
-                anomalyHighlight        // the headline verdict ("is this normal?")
-                groupedObservations    // one-line "also:" for a grouped insight
-            }
+            titleRow                    // tier · name · ✨ · severity cue · ×
+            // The plain-English OBSERVATION now leads every card — including a
+            // collapsed group member — because it's the sentence that actually
+            // differentiates cards (process + what's happening). The verdict is
+            // demoted to the small severity cue in the title row, so a stack no
+            // longer reads as five identical "This needs a look" headlines.
+            glanceLine                  // the observation — the card's lead line
+            groupedObservations        // one-line "also:" for a grouped insight
             verifyRow                   // transient "Check again" feedback
             if confirmingAck { ackConfirm }  // the "Normal for me" teaching two-step
-            // Progressive disclosure: the collapsed card is just the headline +
-            // status. The plain-English explanation, the identity/what-it-is,
-            // the remediation buttons, the expert answer, and all source links
-            // live behind Details — keeps the stack short so many cards don't
-            // run off-screen.
+            // Progressive disclosure: the collapsed card is title + observation.
+            // The plain-English explanation, the identity/what-it-is, the
+            // remediation buttons, the expert answer, and all source links live
+            // behind Details — keeps the stack short so many cards don't run
+            // off-screen.
             if expanded {
-                if embedded {
-                    anomalyHighlight    // this member's own verdict, revealed here
-                    groupedObservations
-                }
                 plainSummary            // the "what this means" explanation
                 identityDetail          // what it is + suggested action (prose)
                 if !judged.isResolved {
@@ -414,7 +419,11 @@ struct DiagnosisCardView: View {
         .contentShape(Rectangle())
         // The whole card toggles the disclosure — clicking anywhere that
         // isn't a button expands/collapses. Buttons capture their own taps.
-        .onTapGesture { withAnimation(.snappy(duration: 0.28)) { expanded.toggle() } }
+        // A host that owns its own selection gesture can opt out (tapToExpand).
+        .onTapGesture {
+            guard tapToExpand else { return }
+            withAnimation(.snappy(duration: 0.28)) { expanded.toggle() }
+        }
         .onHover { isHovering = $0 }
         .confirmationDialog(
             "Force quit “\(judged.anomaly.identity.executableName)”?",
@@ -569,9 +578,10 @@ struct DiagnosisCardView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .help(titleHelp)
-                // A member collapses its verdict (which carries the ✨) behind
-                // Details, so surface the "expert answer ready" ✨ on the row.
-                if embedded, case .completed = judged.escalation {
+                // The ✨ "expert answer ready" marker rides the name on every
+                // card now — the old verdict headline that used to carry it is
+                // gone — so a paid answer is still discoverable at a glance.
+                if case .completed = judged.escalation {
                     Image(systemName: "sparkles")
                         .foregroundStyle(.green)
                         .imageScale(.small)
@@ -581,8 +591,15 @@ struct DiagnosisCardView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            // The verdict, demoted to a small quiet severity cue next to the
+            // name: a stack now differentiates by its observation, not by a
+            // repeated headline. Suppressed once resolved — the Resolved badge
+            // speaks for the card then.
+            if !judged.isResolved {
+                SeverityCue(urgency: judged.urgency)
+            }
             // Controls reveal on hover so a resting card is just tier · name ·
-            // verdict — a clean, scannable list. Details, ⋯ and × live here now.
+            // cue — a clean, scannable list. Details, ⋯ and × live here now.
             if isHovering, !judged.isResolved {
                 detailsToggle
                 if appState != nil { cardMenu }
@@ -609,15 +626,17 @@ struct DiagnosisCardView: View {
             : judged.anomaly.identity.executableName
     }
 
-    /// The safety tier as an icon in front of the name — a glanceable status
-    /// light (green = safe to act, amber = caution, gray = explain-only). The
-    /// word + a plain description live in a tap-open popover, so the title row
-    /// stays clean. NOTE: this means "safe to ACT," not "nothing is wrong."
+    /// A single quiet, neutral leading marker in front of the name — the SAME on
+    /// every card, regardless of tier. Urgency is conveyed SOLELY by the exception
+    /// SeverityCue badge (none / amber / red), so this icon never competes with it:
+    /// a tier-1 "safe" shield or tier-2 warning next to a red badge was incoherent.
+    /// It's still a tap target for the tier explainer popover (which keeps the
+    /// tier's own color + word); action-safety is enforced at the action buttons.
     private var tierIcon: some View {
         Button { showingTierInfo = true } label: {
-            Image(systemName: tierSymbol)
+            Image(systemName: "info.circle.fill")
                 .imageScale(.large)
-                .foregroundStyle(tierTint)
+                .foregroundStyle(.secondary)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -697,29 +716,19 @@ struct DiagnosisCardView: View {
             .background(.secondary.opacity(0.15), in: Capsule())
     }
 
-    /// THE highlight: what's actually abnormal, in prominent primary type.
-    /// No tier dot here — a green dot next to "at 150% for 41 hours" reads as
-    /// "this is fine," the opposite of the truth. The tier describes the
-    /// ACTION's safety, so it lives with the action (see tierIndicator).
-    private var anomalyHighlight: some View {
-        // A ✨ leads the verdict when a paid expert answer is ready — the
-        // signal that there's an opinion to read (it lives under Details).
-        // Regular weight, primary colour: the verdict stays the focal line (vs.
-        // the secondary explanation) without the whole card shouting in bold.
-        HStack(alignment: .firstTextBaseline, spacing: 5) {
-            if case .completed = judged.escalation {
-                Image(systemName: "sparkles")
-                    .foregroundStyle(.green)
-                    .imageScale(.small)
-                    .help("Expert answer ready — open Details to read it.")
-                    .accessibilityLabel("Expert answer ready")
-            }
-            Text(judged.card.isThisNormal.sentenceCased)
-                .font(.body)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+    /// THE lead line: the plain-English OBSERVATION — the whole-machine share
+    /// ("It's using about 8% of your total processing power, ~2.4× its usual"),
+    /// composed DETERMINISTICALLY (never the model's arithmetic) so the anchored
+    /// number is always right. Primary type, directly under the title row: this
+    /// is the sentence that differentiates one card from the next (the verdict
+    /// is now the small severity cue in the title row). Exact per-core figures
+    /// stay in Details.
+    private var glanceLine: some View {
+        Text(judged.glance.sentenceCased)
+            .font(.body)
+            .foregroundStyle(.primary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The processed, plain-English "what this means" — for a potentially
@@ -888,8 +897,23 @@ struct DiagnosisCardView: View {
                     Text("knowledge map only").font(.callout).foregroundStyle(.secondary)
                 }
             }
+            // The model's plain "what's normal" read — one calm sentence on how
+            // far from usual this is (the precise figures are in the readout
+            // below). Rendered here so the generated field isn't wasted and the
+            // headline verdict has its supporting "normal for it" line.
+            if !judged.card.isThisNormal.isEmpty {
+                Text(judged.card.isThisNormal.sentenceCased)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // The exact technical readout — the numbers that used to crowd the
+            // headline now live here, low-contrast and aligned: per-core CPU
+            // (the figure Activity Monitor shows), memory, the baseline window,
+            // the plain signal name, and where the diagnosis came from.
+            detailsReadout
             // How long this has been flagged (distinct from the metric window in
-            // the verdict) — helps judge staleness; "Check again" re-verifies it.
+            // the readout) — helps judge staleness; "Check again" re-verifies it.
             // When the process resolved and came back, show the true start of the
             // saga plus how many times it has returned, not just this episode.
             firstFlaggedLine
@@ -897,6 +921,97 @@ struct DiagnosisCardView: View {
                 .foregroundStyle(.tertiary)
         }
         .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    /// One row of the technical readout.
+    private struct DetailRow: Identifiable {
+        // Key by the (unique) label — a fresh UUID() per render would mint new
+        // identities every pass and defeat ForEach diffing.
+        var id: String { label }
+        let label: String
+        let value: String
+    }
+
+    /// Where the diagnosis was sourced — plain provenance for the readout.
+    private var detailSource: String {
+        if judged.discovery.identifiesProcess { return "Sourced by Anomalous" }
+        if judged.judgedByModel { return "On-device AI" }
+        return "Built-in knowledge map"
+    }
+
+    /// The exact figures, keyed off the driving metric (never fabricated — a
+    /// CPU anomaly shows no memory number it didn't measure). Processor stays in
+    /// PER-CORE terms with the "(the figure Activity Monitor shows)" bridge, so
+    /// the readout reconciles with the whole-machine glance above it.
+    private var detailRows: [DetailRow] {
+        let a = judged.anomaly
+        let current = a.magnitudeCurve.last
+        let baseline = a.baselineValue
+        func whole(_ v: Double) -> String { "\(Int(v.rounded()))" }
+        func metricRow(_ label: String, _ unit: String, note: String = "") -> DetailRow? {
+            guard let current else { return nil }
+            var value = "\(whole(current))\(unit)"
+            if let baseline { value += " · normally \(whole(baseline))\(unit)" }
+            if !note.isEmpty { value += "  \(note)" }
+            return DetailRow(label: label, value: value)
+        }
+
+        var rows: [DetailRow] = []
+        switch a.kind {
+        case .sustainedCPU:
+            if let r = metricRow("Processor", "% per core", note: "(the figure Activity Monitor shows)") { rows.append(r) }
+        case .cpuTimeRatio:
+            // A lifetime-average share of this process's OWN run time
+            // (cputime ÷ uptime) — not an instantaneous per-core load, so no
+            // "Activity Monitor shows" note (baseline is nil here too).
+            if let r = metricRow("Processor", "%", note: "(lifetime average of its own run time, not current load)") { rows.append(r) }
+        case .rssLeak, .rssCeiling, .memoryLeakFootprint:
+            if let r = metricRow("Memory", " MB") { rows.append(r) }
+        case .gpuSaturation:
+            if let r = metricRow("GPU", "%") { rows.append(r) }
+        case .energyWakeups:
+            if let r = metricRow("Wakeups", "/sec") { rows.append(r) }
+        case .diskThrash:
+            if let r = metricRow("Disk", " MB/s") { rows.append(r) }
+        case .networkThroughput:
+            if let r = metricRow("Network", " MB/s") { rows.append(r) }
+        case .novelProcess, .appHung:
+            break   // no measured resource figure to quote honestly
+        }
+        rows.append(DetailRow(label: "Baseline window", value: Self.humanWindow(a.windowSeconds)))
+        rows.append(DetailRow(label: "Signal", value: a.kind.plainLabel))
+        rows.append(DetailRow(label: "Source", value: detailSource))
+        return rows
+    }
+
+    /// The exact numbers, aligned and low-contrast — Apple-native Grid only.
+    private var detailsReadout: some View {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 3) {
+            ForEach(detailRows) { row in
+                GridRow(alignment: .firstTextBaseline) {
+                    Text(row.label)
+                        .foregroundStyle(.tertiary)
+                        .gridColumnAlignment(.leading)
+                    Text(row.value)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .font(.caption)
+        .padding(.top, 2)
+    }
+
+    /// The metric window in human units for the readout (distinct from the
+    /// first-flagged clock) — "25 minutes", "3 hours", "2 days".
+    static func humanWindow(_ seconds: TimeInterval) -> String {
+        let hours = seconds / 3600
+        if hours >= 48 { return "\(Int(hours / 24)) days" }
+        if hours >= 1 { let h = Int(hours); return "\(h) hour\(h == 1 ? "" : "s")" }
+        let mins = max(1, Int((seconds / 60).rounded()))
+        return "\(mins) minute\(mins == 1 ? "" : "s")"
     }
 
     /// "First flagged …", enriched to "First flagged … · returned N×" when the
@@ -1199,6 +1314,66 @@ func anomalyTierTint(_ tier: Int) -> Color {
     }
 }
 
+// MARK: - Severity cue (the demoted verdict)
+
+/// The plain-English verdict, demoted from a big headline to a small, quiet
+/// Apple-native tag beside the process name: an SF Symbol + short text in a
+/// very subtle tinted capsule, color keyed to severity. It's a glance-level
+/// severity CUE, never the focal line — the observation leads the card. Text
+/// and icon always carry the meaning (never color alone), and the treatment
+/// stays restrained because this app never shouts. Shared so the single card
+/// and the group header render the identical tag.
+struct SeverityCue: View {
+    /// The exception-based urgency cue. `.none` renders NOTHING — the card's
+    /// existence is already the heads-up; a badge is the exception, not the rule.
+    let urgency: UrgencyCue
+
+    var body: some View {
+        switch urgency {
+        case .none:
+            EmptyView()
+        case .worthALook, .needsALook:
+            Label(text, systemImage: symbol)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(tint)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(tint.opacity(0.12), in: Capsule())
+                .fixedSize()
+                .accessibilityLabel(text)
+        }
+    }
+
+    private var text: String {
+        switch urgency {
+        case .none: return ""
+        case .worthALook: return "worth a look"
+        case .needsALook: return "needs a look"
+        }
+    }
+
+    private var symbol: String {
+        switch urgency {
+        case .none: return ""
+        case .worthALook: return "eye"
+        case .needsALook: return "exclamationmark.circle"
+        }
+    }
+
+    /// Orange for "worth a look", and a MUTED red for "needs a look" —
+    /// restrained, an attention cue not a siren.
+    private var tint: Color {
+        switch urgency {
+        case .none: return .clear
+        case .worthALook: return .orange
+        case .needsALook: return Self.mutedRed
+        }
+    }
+
+    /// A softened system red — clearly "needs attention", never an alarm red.
+    private static let mutedRed = Color(red: 0.80, green: 0.29, blue: 0.26)
+}
+
 // MARK: - Grouped instances
 
 /// A disclosure card grouping ≥2 anomalous instances of the SAME program
@@ -1211,6 +1386,9 @@ func anomalyTierTint(_ tier: Int) -> Color {
 struct GroupedAnomalyCard: View {
     let instances: [AppState.JudgedAnomaly]
     var appState: AppState
+    /// Forwarded to each member card — FALSE in a Window so a member's source
+    /// link opens in place instead of closing the window (see DiagnosisCardView).
+    var dismissesOnLinkTap: Bool = true
     @State private var expanded = false
 
     /// The instance whose verdict and tier headline the group. Instances of one
@@ -1236,7 +1414,8 @@ struct GroupedAnomalyCard: View {
                     DiagnosisCardView(judged: judged, onDismiss: {
                         appState.dismiss(judged)
                     }, appState: appState, showGetHelp: true,
-                    instanceLabel: "Process \(idx + 1)", embedded: true)
+                    instanceLabel: "Process \(idx + 1)", embedded: true,
+                    dismissesOnLinkTap: dismissesOnLinkTap)
                 }
             }
         }
@@ -1246,7 +1425,12 @@ struct GroupedAnomalyCard: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center, spacing: 7) {
-                // No tier icon on the group header — the members carry their own.
+                // The same quiet, neutral leading marker every card carries — so a
+                // group header aligns with single cards. Urgency lives only in the
+                // SeverityCue badge, never in a tier-colored icon.
+                Image(systemName: "info.circle.fill")
+                    .imageScale(.large)
+                    .foregroundStyle(.secondary)
                 HStack(spacing: 5) {
                     Text(name)
                         .font(.body.weight(.medium))
@@ -1265,13 +1449,19 @@ struct GroupedAnomalyCard: View {
                             .layoutPriority(1)
                     }
                 }
-                Spacer(minLength: 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // The group's verdict as the same small severity cue the member
+                // cards use — not a repeated big headline.
+                SeverityCue(urgency: representative.urgency)
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(expanded ? 90 : 0))
             }
-            Text(representative.card.isThisNormal.sentenceCased)
+            // The representative instance's plain observation leads the group,
+            // exactly as it leads a single card — so a collapsed group reads as
+            // real content, not a clone of every other card in the stack.
+            Text(representative.glance.sentenceCased)
                 .font(.body)
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1281,7 +1471,7 @@ struct GroupedAnomalyCard: View {
         .contentShape(Rectangle())
         .onTapGesture { withAnimation(.snappy(duration: 0.28)) { expanded.toggle() } }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(name), \(instances.count) instances. \(representative.card.isThisNormal)")
+        .accessibilityLabel("\(name), \(instances.count) instances. \(representative.verdictHeadline)")
         .accessibilityHint(expanded ? "Collapse" : "Expand to see each instance")
         .accessibilityAddTraits(.isButton)
     }

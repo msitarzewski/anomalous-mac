@@ -70,8 +70,9 @@ struct BaselineStoreTests {
         await store.loadIfNeeded()
         await store.record(key: "dasd", cpuPercent: 0.1, rssMB: 35)
         let sentence = await store.baseline(forKey: "dasd")!.sentence
-        #expect(sentence.contains("CPU"))
-        #expect(sentence.contains("MB"))
+        // Whole-machine, plain-language phrasing — no per-core "CPU"/raw "MB".
+        #expect(sentence.contains("processing power"))
+        #expect(sentence.contains("your memory"))
     }
 
     private var utc: Calendar {
