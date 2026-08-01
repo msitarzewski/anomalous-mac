@@ -11,30 +11,12 @@ private extension String {
     }
 }
 
-/// Carries the card stack's natural (unclamped) height up so the scroll frame
-/// can be capped to min(natural, screen-fit).
-private struct CardsHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
 struct AnomalyListView: View {
     @Bindable var appState: AppState
     let updater: UpdaterController
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
-    @State private var measuredCardsHeight: CGFloat = 0
-
-    /// Cap for the scrollable card stack — the whole popover must fit the
-    /// screen (the MenuBarExtra window sizes to intrinsic content, so an
-    /// unbounded stack runs off-screen). Leaves room for the header, helper
-    /// banner, divider, and footer.
-    private static var maxCardsHeight: CGFloat {
-        max(240, (NSScreen.main?.visibleFrame.height ?? 900) - 240)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -72,15 +54,15 @@ struct AnomalyListView: View {
                 // min(natural, cap), so a short stack shows no empty space and a
                 // tall one (even a single tall card) scrolls instead of running
                 // off-screen. Only scrolls when it actually overflows.
-                ScrollView {
-                    cards
-                        .background(GeometryReader { g in
-                            Color.clear.preference(key: CardsHeightKey.self, value: g.size.height)
-                        })
-                }
-                .frame(height: min(measuredCardsHeight == 0 ? Self.maxCardsHeight : measuredCardsHeight, Self.maxCardsHeight))
-                .scrollBounceBehavior(.basedOnSize)
-                .onPreferenceChange(CardsHeightKey.self) { measuredCardsHeight = $0 }
+                // Render the cards in a plain stack — NO ScrollView. The
+                // MenuBarExtra window sizes to this content, so expanding a card
+                // grows the WINDOW in place: the cards above stay put and it
+                // animates cleanly. A ScrollView here auto-scrolled on expand
+                // (yanking the cards above out of view — "scrolls up first") and
+                // reflowed the panel. Anomalies are rare by design, so the stack
+                // stays short; a genuinely huge stack could get tall, which the
+                // detection-sensitivity work will keep in check.
+                cards
             }
 
             helperBanner
@@ -329,7 +311,7 @@ struct DiagnosisCardView: View {
     @State private var confirmingBrew = false
     @State private var confirmingForceQuit = false
     @State private var expanded = false
-    @State private var showingTierInfo = false
+    @State private var attentionHovering = false
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
 
@@ -629,7 +611,16 @@ struct DiagnosisCardView: View {
         Image(systemName: "info.circle.fill")
             .imageScale(.large)
             .foregroundStyle(urgencyTint(judged.urgency))
-            .help(urgencyTooltip(judged.urgency))
+            // Instant hover tip — the system .help() tooltip has a ~1s delay we
+            // can't shorten, so drive a popover straight off the hover state.
+            .onHover { attentionHovering = $0 }
+            .popover(isPresented: $attentionHovering, arrowEdge: .bottom) {
+                Text(urgencyTooltip(judged.urgency))
+                    .font(.callout)
+                    .padding(10)
+                    .frame(maxWidth: 240)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             .accessibilityLabel(urgencyTooltip(judged.urgency))
     }
 
@@ -898,7 +889,9 @@ struct DiagnosisCardView: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
-        .transition(.opacity.combined(with: .move(edge: .top)))
+        // Fade in place as the card grows — a .move(edge:.top) here made the
+        // detail slide down from the top of the panel (a flash-then-settle glitch).
+        .transition(.opacity)
     }
 
     /// One row of the technical readout.
@@ -1381,6 +1374,7 @@ func urgencyTooltip(_ urgency: UrgencyCue) -> String {
 /// DiagnosisCardView wholesale, so every per-instance capability — Get Help,
 /// the action buttons, Details, discovery — stays intact.
 struct GroupedAnomalyCard: View {
+    @State private var attentionHovering = false
     let instances: [AppState.JudgedAnomaly]
     var appState: AppState
     /// Forwarded to each member card — FALSE in a Window so a member's source
@@ -1427,7 +1421,14 @@ struct GroupedAnomalyCard: View {
                 Image(systemName: "info.circle.fill")
                     .imageScale(.large)
                     .foregroundStyle(urgencyTint(representative.urgency))
-                    .help(urgencyTooltip(representative.urgency))
+                    .onHover { attentionHovering = $0 }
+                    .popover(isPresented: $attentionHovering, arrowEdge: .bottom) {
+                        Text(urgencyTooltip(representative.urgency))
+                            .font(.callout)
+                            .padding(10)
+                            .frame(maxWidth: 240)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     .accessibilityLabel(urgencyTooltip(representative.urgency))
                 HStack(spacing: 5) {
                     Text(name)
