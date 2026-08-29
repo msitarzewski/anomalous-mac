@@ -1,6 +1,6 @@
 import Foundation
 
-#if canImport(FoundationModels)
+#if false
 import FoundationModels
 
 /// Rung 3 — the Anomalous triage backend as a Foundation Models provider

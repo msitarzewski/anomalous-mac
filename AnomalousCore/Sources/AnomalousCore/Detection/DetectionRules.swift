@@ -678,7 +678,9 @@ public enum DetectionRules {
         else { return nil }
         let percents = rates.map { $0 * secondsPerTick * 100 }
         let average = percents.reduce(0, +) / Double(percents.count)
-        guard average >= thresholds.gpuFloorPercent else { return nil }
+        let isBrowserGPU = last.identity.bundleID == "com.apple.WebKit.GPU" || last.identity.executableName.hasSuffix(".GPU") || last.identity.executableName.contains("GPU")
+        let effectiveFloor = isBrowserGPU ? max(thresholds.gpuFloorPercent, 65.0) : thresholds.gpuFloorPercent
+        guard average >= effectiveFloor else { return nil }
         let deviation = RobustMath.deviation(average, from: baseline.stats)
         guard deviation >= thresholds.gpuMADMultiplier else { return nil }
         return Anomaly(

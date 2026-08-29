@@ -20,7 +20,7 @@ enum Keychain {
     private static let accessGroup = "7JQGQ7CRH8.bot.anomalous.sensor.shared"
 
     static func string(for account: String) -> String? {
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
@@ -29,7 +29,12 @@ enum Keychain {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+        var status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecMissingEntitlement || status == -34018 {
+            query.removeValue(forKey: kSecAttrAccessGroup as String)
+            status = SecItemCopyMatching(query as CFDictionary, &item)
+        }
+        guard status == errSecSuccess,
               let data = item as? Data,
               let value = String(data: data, encoding: .utf8)
         else { return nil }
@@ -37,7 +42,7 @@ enum Keychain {
     }
 
     static func set(_ value: String, for account: String) {
-        let base: [String: Any] = [
+        var base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
@@ -46,7 +51,10 @@ enum Keychain {
 
         // Empty string clears the credential.
         guard !value.isEmpty else {
-            SecItemDelete(base as CFDictionary)
+            if SecItemDelete(base as CFDictionary) == errSecMissingEntitlement {
+                base.removeValue(forKey: kSecAttrAccessGroup as String)
+                SecItemDelete(base as CFDictionary)
+            }
             return
         }
 
@@ -55,9 +63,17 @@ enum Keychain {
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
 
-        let status = SecItemUpdate(base as CFDictionary, attributes as CFDictionary)
+        var status = SecItemUpdate(base as CFDictionary, attributes as CFDictionary)
+        if status == errSecMissingEntitlement || status == -34018 {
+            base.removeValue(forKey: kSecAttrAccessGroup as String)
+            status = SecItemUpdate(base as CFDictionary, attributes as CFDictionary)
+        }
         if status == errSecItemNotFound {
-            SecItemAdd(base.merging(attributes) { $1 } as CFDictionary, nil)
+            let addStatus = SecItemAdd(base.merging(attributes) { $1 } as CFDictionary, nil)
+            if addStatus == errSecMissingEntitlement || addStatus == -34018 {
+                base.removeValue(forKey: kSecAttrAccessGroup as String)
+                SecItemAdd(base.merging(attributes) { $1 } as CFDictionary, nil)
+            }
         }
     }
 }

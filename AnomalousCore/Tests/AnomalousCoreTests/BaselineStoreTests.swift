@@ -218,4 +218,25 @@ struct BaselineStoreTests {
         await reloaded.loadIfNeeded()
         #expect(await reloaded.isFlagged(dasd) == false)
     }
+
+    @Test("stale diagnoses are pruned when exceeding TTL")
+    func diagnosesPruning() async {
+        let url = tempFile()
+        let store = BaselineStore(fileURL: url)
+        await store.loadIfNeeded()
+        let card = DiagnosisCard(
+            whatItIs: "w", whyItsProbablyHot: "h", isThisNormal: "n",
+            suggestedAction: "a", actionSafetyTier: 1, causallyLinkedProcesses: []
+        )
+        let oldDiag = CachedDiagnosis(card: card, kind: .sustainedCPU, judgedByModel: false, cachedAt: Date().addingTimeInterval(-35 * 86_400))
+        let freshDiag = CachedDiagnosis(card: card, kind: .sustainedCPU, judgedByModel: false, cachedAt: Date())
+
+        await store.cacheDiagnosis(oldDiag, processKey: "old_proc", kind: .sustainedCPU)
+        await store.cacheDiagnosis(freshDiag, processKey: "fresh_proc", kind: .sustainedCPU)
+
+        await store.pruneExpiredFlags(now: Date())
+
+        #expect(await store.cachedDiagnosis(processKey: "old_proc", kind: .sustainedCPU) == nil)
+        #expect(await store.cachedDiagnosis(processKey: "fresh_proc", kind: .sustainedCPU) != nil)
+    }
 }

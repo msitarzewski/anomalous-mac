@@ -27,6 +27,10 @@ public enum TerminationGuard {
         "launchd", "kernel_task", "WindowServer", "loginwindow", "logind",
         "securityd", "syslogd", "notifyd", "opendirectoryd", "coreauthd",
         "trustd", "syspolicyd", "endpointsecurityd", "sysmond", "watchdogd",
+        "mds", "fseventsd", "cfprefsd", "tccd", "sshd", "cron", "mDNSResponder",
+        "diskarbitrationd", "bluetoothd", "wifid", "containermanagerd", "powerd",
+        "runningboardd", "diagnosticd", "configd", "amfid", "authd", "UserEventAgent",
+        "systemsoundserverd", "spindump", "timed"
     ]
 
     /// Decide whether a termination is authorized. Defense in depth, in order:

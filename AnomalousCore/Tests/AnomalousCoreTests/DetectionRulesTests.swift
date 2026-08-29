@@ -15,13 +15,19 @@ private func sample(cpuTime: Double, uptime: TimeInterval, rssBytes: UInt64 = 0,
 
 private func samples(cpuPercent: Double, minutes: Int, rssMB: [Double]? = nil) -> [ProcessSample] {
     let start = Date(timeIntervalSince1970: 1_750_000_000)
-    return (0...minutes).map { minute in
-        ProcessSample(
+    return (0...minutes).map { minute -> ProcessSample in
+        let offset = Double(minute) * 60
+        let mb: Double = {
+            guard let rssMB = rssMB, !rssMB.isEmpty else { return 100 }
+            return rssMB[min(minute, rssMB.count - 1)]
+        }()
+        let bytes = UInt64(mb * 1_048_576)
+        return ProcessSample(
             identity: identity(),
-            timestamp: start.addingTimeInterval(Double(minute) * 60),
-            cpuTimeSeconds: Double(minute) * 60 * cpuPercent / 100,
-            residentBytes: UInt64((rssMB?[min(minute, (rssMB?.count ?? 1) - 1)] ?? 100) * 1_048_576),
-            uptimeSeconds: Double(minute) * 60
+            timestamp: start.addingTimeInterval(offset),
+            cpuTimeSeconds: offset * cpuPercent / 100,
+            residentBytes: bytes,
+            uptimeSeconds: offset
         )
     }
 }

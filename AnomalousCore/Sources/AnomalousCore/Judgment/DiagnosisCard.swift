@@ -160,8 +160,9 @@ public struct CachedDiagnosis: Codable, Sendable {
     /// Additive: the derived plain-English verdict headline (absent in v1/v2
     /// caches → "" on decode, re-derived by the view).
     public let verdict: String
+    public let cachedAt: Date
 
-    public init(card: DiagnosisCard, kind: Anomaly.Kind, judgedByModel: Bool) {
+    public init(card: DiagnosisCard, kind: Anomaly.Kind, judgedByModel: Bool, cachedAt: Date = .now) {
         whatItIs = card.whatItIs
         whyItsProbablyHot = card.whyItsProbablyHot
         isThisNormal = card.isThisNormal
@@ -173,6 +174,7 @@ public struct CachedDiagnosis: Codable, Sendable {
         isThisNormalVerdict = card.isThisNormalVerdict
         confidenceNote = card.confidenceNote
         verdict = card.verdict
+        self.cachedAt = cachedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -189,6 +191,7 @@ public struct CachedDiagnosis: Codable, Sendable {
             ?? DiagnosisCard.NormalVerdict.uncertain.rawValue
         confidenceNote = try c.decodeIfPresent(String.self, forKey: .confidenceNote) ?? ""
         verdict = try c.decodeIfPresent(String.self, forKey: .verdict) ?? ""
+        cachedAt = try c.decodeIfPresent(Date.self, forKey: .cachedAt) ?? .now
     }
 
     public var card: DiagnosisCard {

@@ -28,6 +28,33 @@
     ]
   },
   {
+    "processName": "siriactionsd",
+    "displayName": "Siri Actions Daemon",
+    "whatItIs": "Apple's Siri Actions background daemon. It coordinates and executes background intents, automations, and action handlers for Siri and the Shortcuts app.",
+    "ownedBy": "Apple (per-user background service, launchd-managed)",
+    "whenHotImplies": "A background shortcut, automated action, or Siri workflow is actively running, or an action extension is in a processing loop. Brief bursts during shortcut runs are normal; continuous high CPU indicates a hung action extension or looping shortcut.",
+    "safetyTier": 1,
+    "safeAction": "Quitting it is safe — macOS starts it back up fresh when the next action or shortcut runs. If high CPU returns immediately, check the Shortcuts app for looping automated shortcuts.",
+    "worstCase": "A currently running background shortcut or Siri automation might be interrupted and restart on its next trigger.",
+    "causallyLinked": [
+      "shortcuts_runtime",
+      "suggestd"
+    ]
+  },
+  {
+    "processName": "shortcuts_runtime",
+    "displayName": "Shortcuts Runtime Service",
+    "whatItIs": "The execution runtime for Apple Shortcuts on macOS. It runs script actions, workflow steps, and third-party app integrations.",
+    "ownedBy": "Apple (per-user agent, launchd-managed)",
+    "whenHotImplies": "An automation or shortcut with complex actions, large file operations, or recursive loops is executing in the background.",
+    "safetyTier": 1,
+    "safeAction": "Quitting it cancels the active shortcut run cleanly. macOS launches a fresh runtime instance when you next trigger a shortcut.",
+    "worstCase": "The active shortcut execution stops.",
+    "causallyLinked": [
+      "siriactionsd"
+    ]
+  },
+  {
     "processName": "mysqld",
     "displayName": "MySQL Database Server",
     "whatItIs": "The MySQL (or Percona) database server. Hosts databases for local development and services; commonly installed via Homebrew, Docker, or a native package.",
@@ -977,6 +1004,114 @@
     "safetyTier": 2,
     "safeAction": "If you're not in a call, quit and reopen FaceTime.",
     "worstCase": "Quitting mid-call ends the call.",
+    "causallyLinked": []
+  },
+  {
+    "processName": "node",
+    "displayName": "Node.js Runtime",
+    "whatItIs": "The Node.js JavaScript runtime, typically running a local development server, bundler, test runner, or script.",
+    "ownedBy": "Developer tooling (installed via Homebrew, nvm, fnm, or Node installer)",
+    "whenHotImplies": "Usually an active build/bundle process (e.g. Next.js, Vite, Webpack), a tight loop or unthrottled file watcher in project code. If you are actively building or serving an app, high CPU is expected; if idle, check for stuck development processes.",
+    "safetyTier": 2,
+    "safeAction": "Terminate the dev server from your terminal or quit the process if it is orphaned.",
+    "worstCase": "Stopping the process will terminate the associated local server or script.",
+    "causallyLinked": []
+  },
+  {
+    "processName": "python3",
+    "displayName": "Python Interpreter",
+    "whatItIs": "The Python 3 runtime executing a script, ML training workload, server, or CLI tool.",
+    "ownedBy": "Developer tooling (installed via Homebrew, pyenv, conda, or system)",
+    "whenHotImplies": "Expected during computation, data analysis, compilation, or local AI/ML inference. If a background script is hanging or spinning at 100% CPU, check the terminal window that launched it.",
+    "safetyTier": 2,
+    "safeAction": "Interrupt the script via Ctrl+C in your terminal or quit if orphaned.",
+    "worstCase": "Terminates the running script or local server.",
+    "causallyLinked": []
+  },
+  {
+    "processName": "python",
+    "displayName": "Python Interpreter",
+    "whatItIs": "The Python runtime executing a script, CLI tool, or local server.",
+    "ownedBy": "Developer tooling (installed via Homebrew, pyenv, conda, or system)",
+    "whenHotImplies": "Active execution of Python code or scripts.",
+    "safetyTier": 2,
+    "safeAction": "Interrupt the script in terminal or terminate if orphaned.",
+    "worstCase": "Terminates the running script.",
+    "causallyLinked": []
+  },
+  {
+    "processName": "spotlightknowledged.updater",
+    "displayName": "Spotlight Knowledge Updater",
+    "whatItIs": "Apple's background knowledge and semantic indexing updater for Spotlight search.",
+    "ownedBy": "Apple (system daemon, launchd-managed)",
+    "whenHotImplies": "Indexing recently modified files, emails, or notes after sync or software updates. High activity usually settles on its own once indexing finishes.",
+    "safetyTier": 3,
+    "safeAction": null,
+    "worstCase": "Quitting is not recommended; macOS will relaunch it immediately to finish indexing.",
+    "causallyLinked": [
+      "mds",
+      "mdworker"
+    ]
+  },
+  {
+    "processName": "contactsd",
+    "displayName": "Contacts Sync Daemon",
+    "whatItIs": "The macOS background service responsible for syncing iCloud and local address book contacts.",
+    "ownedBy": "Apple (per-user daemon, launchd-managed)",
+    "whenHotImplies": "Syncing address book changes or resolving address book conflict states. Settles automatically after sync completes.",
+    "safetyTier": 1,
+    "safeAction": "Quitting is safe — macOS automatically relaunches it and restarts sync cleanly.",
+    "worstCase": "Contact sync may briefly pause and resume on relaunch.",
+    "causallyLinked": []
+  },
+  {
+    "processName": "com.docker.backend",
+    "displayName": "Docker Desktop Backend",
+    "whatItIs": "The background hypervisor daemon managing the Docker Linux VM and container bridging on macOS.",
+    "ownedBy": "Docker Desktop",
+    "whenHotImplies": "Containers executing heavy workloads, database queries, or disk I/O in the Linux VM.",
+    "safetyTier": 2,
+    "safeAction": "Inspect running containers using `docker ps` and stop the intensive container, or restart Docker Desktop.",
+    "worstCase": "Stopping drops all active container networks and running containers.",
+    "causallyLinked": [
+      "Docker Desktop"
+    ]
+  },
+  {
+    "processName": "cargo",
+    "displayName": "Rust Cargo Build Manager",
+    "whatItIs": "The Rust package manager and build tool coordinating compilation and dependency resolution.",
+    "ownedBy": "Developer tooling (Rust toolchain via rustup)",
+    "whenHotImplies": "Actively compiling a Rust project or running cargo check/clippy in an IDE.",
+    "safetyTier": 2,
+    "safeAction": "Wait for compilation to complete, or cancel with Ctrl+C in the terminal.",
+    "worstCase": "Cancels the active build; subsequent builds will resume incrementally.",
+    "causallyLinked": [
+      "rustc"
+    ]
+  },
+  {
+    "processName": "rustc",
+    "displayName": "Rust Compiler",
+    "whatItIs": "The Rust compiler generating machine code for Rust source files.",
+    "ownedBy": "Developer tooling (Rust toolchain)",
+    "whenHotImplies": "Heavy CPU and memory utilization during LLVM optimization passes and code generation.",
+    "safetyTier": 2,
+    "safeAction": "Allow the compilation to finish or interrupt the parent cargo build.",
+    "worstCase": "Terminates the active compilation.",
+    "causallyLinked": [
+      "cargo"
+    ]
+  },
+  {
+    "processName": "bun",
+    "displayName": "Bun JavaScript Runtime",
+    "whatItIs": "The high-performance Bun JavaScript/TypeScript runtime and package manager.",
+    "ownedBy": "Developer tooling",
+    "whenHotImplies": "Running scripts, bundling, testing, or serving applications.",
+    "safetyTier": 2,
+    "safeAction": "Stop the dev server or script from terminal.",
+    "worstCase": "Terminates the running JavaScript/TypeScript server.",
     "causallyLinked": []
   }
 ]

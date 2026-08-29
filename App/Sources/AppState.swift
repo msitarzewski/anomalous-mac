@@ -1148,7 +1148,10 @@ final class AppState {
 
         // Cache-first: reuse the prior card for this process+condition so the
         // same answer shows every time — stable wording, no re-inference.
-        if let cached = await baselineStore.cachedDiagnosis(processKey: processKey, kind: anomaly.kind) {
+        // However, if the cached card was a placeholder unknown card and we now
+        // have a knowledge map entry, re-judge to surface the real identity.
+        if let cached = await baselineStore.cachedDiagnosis(processKey: processKey, kind: anomaly.kind),
+           !(hasCorpusEntry && !cached.judgedByModel && cached.card.whatItIs.contains("Unknown process")) {
             var judged = JudgedAnomaly(anomaly: anomaly, card: cached.card, judgedByModel: cached.judgedByModel, baselineSentence: baseline)
             judged.returnedWorse = returnedWorse
             judged.recurrence = recurrence
@@ -1298,6 +1301,7 @@ final class AppState {
     /// is a consent, so it discovers regardless of the toggle (still logged) and
     /// FORCES past the lineage cache (an explicit retry).
     func lookUp(_ judged: JudgedAnomaly) {
+        setDiscovery(.researching, id: judged.id)
         fireDiscovery(judged, force: true)
     }
 
@@ -1308,7 +1312,7 @@ final class AppState {
     /// either way, so a lookup can never hang forever or re-fire every tick.
     private func fireDiscovery(_ judged: JudgedAnomaly, force: Bool = false) {
         guard force || discoveryEnabled else { return }
-        if case .researching = judged.discovery { return }
+        if case .researching = judged.discovery, !force { return }
         if case .sourced = judged.discovery { return }
         if case .researched = judged.discovery { return }
         let lineage = BaselineStore.key(for: judged.anomaly.identity)
@@ -1342,6 +1346,7 @@ final class AppState {
 
         Task { [weak self] in
             guard let self else { return }
+            let startTime = Date.now
             do {
                 let submission = try await self.discoveryClient.discover(request)
                 if submission.status == .complete, let assessment = submission.assessment {
@@ -1362,6 +1367,10 @@ final class AppState {
                 // dedup), so a later tick re-polls a still-working lookup instead
                 // of leaving the user on "unknown" while an answer is coming.
                 for attempt in 0..<40 {
+                    guard !Task.isCancelled else { return }
+                    if attempt >= 5 && !self.popoverIsOpen {
+                        return
+                    }
                     try await Task.sleep(for: .seconds(attempt < 20 ? 3 : 6))
                     let result = try await self.discoveryClient.poll(discoveryID: discoveryID)
                     switch result.status {
@@ -1381,7 +1390,20 @@ final class AppState {
                 }
                 self.resolveDiscovery(.failed("Lookup timed out"), lineage: lineage, id: id)
             } catch {
-                self.resolveDiscovery(.failed("Couldn't reach the service"), lineage: lineage, id: id)
+                let elapsed = Date.now.timeIntervalSince(startTime)
+                if elapsed < 0.6 {
+                    try? await Task.sleep(for: .milliseconds(Int((0.6 - elapsed) * 1000)))
+                }
+                let msg: String
+                if let discErr = error as? DiscoveryClient.DiscoveryError {
+                    switch discErr {
+                    case .server(let code): msg = "Service unavailable (\(code))"
+                    case .timedOut: msg = "Connection timed out"
+                    }
+                } else {
+                    msg = "Couldn't reach the service"
+                }
+                self.resolveDiscovery(.failed(msg), lineage: lineage, id: id)
                 print("[anomalous] discovery failed for \(anomaly.identity.executableName): \(error.localizedDescription)")
             }
         }
@@ -1641,7 +1663,14 @@ final class AppState {
         else { return nil } // flagged but no longer actively anomalous — leave it off screen
         let processKey = BaselineStore.key(for: sample.identity)
         for anomaly in candidates {
-            guard let cached = await baselineStore.cachedDiagnosis(processKey: processKey, kind: anomaly.kind) else { continue }
+            guard var cached = await baselineStore.cachedDiagnosis(processKey: processKey, kind: anomaly.kind) else { continue }
+            let hasCorpus = knowledgeMap?.entry(for: sample.identity) != nil
+            if hasCorpus && !cached.judgedByModel && cached.card.whatItIs.contains("Unknown process"),
+               let entry = knowledgeMap?.entry(for: sample.identity) {
+                let fresh = JudgmentEngine.mapOnlyCard(anomaly: anomaly, entry: entry, baselineSentence: Self.observation(for: anomaly))
+                cached = CachedDiagnosis(card: fresh, kind: anomaly.kind, judgedByModel: false)
+                await baselineStore.cacheDiagnosis(cached, processKey: processKey, kind: anomaly.kind)
+            }
 
             // Phase 4: the acknowledgment gate guards re-showing too — this is
             // the common suppression path right after "normal for me" (the

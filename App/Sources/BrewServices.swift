@@ -63,11 +63,46 @@ enum BrewServices {
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = FileHandle.nullDevice
-            process.terminationHandler = { proc in
-                let out = try? pipe.fileHandleForReading.readToEnd()
-                continuation.resume(returning: proc.terminationStatus == 0 ? (out ?? Data()) : nil)
+
+            final class BufferBox: @unchecked Sendable {
+                private let lock = NSLock()
+                private var data = Data()
+
+                func append(_ chunk: Data) {
+                    guard !chunk.isEmpty else { return }
+                    lock.lock()
+                    data.append(chunk)
+                    lock.unlock()
+                }
+
+                func extract() -> Data {
+                    lock.lock()
+                    defer { lock.unlock() }
+                    return data
+                }
             }
-            do { try process.run() } catch { continuation.resume(returning: nil) }
+
+            let readHandle = pipe.fileHandleForReading
+            let buffer = BufferBox()
+
+            readHandle.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                buffer.append(chunk)
+            }
+
+            process.terminationHandler = { proc in
+                readHandle.readabilityHandler = nil
+                let remaining = readHandle.readDataToEndOfFile()
+                buffer.append(remaining)
+                let result = proc.terminationStatus == 0 ? buffer.extract() : nil
+                continuation.resume(returning: result)
+            }
+            do {
+                try process.run()
+            } catch {
+                readHandle.readabilityHandler = nil
+                continuation.resume(returning: nil)
+            }
         }
     }
 }

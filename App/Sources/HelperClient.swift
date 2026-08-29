@@ -118,13 +118,13 @@ final class HelperClient {
     enum Status: Equatable { case notInstalled, requiresApproval, installed, failed(String) }
 
     private(set) var status: Status = .notInstalled
-    /// True once a helper sample has actually succeeded — reflects the root
-    /// service being reachable however it was installed.
     private(set) var active = false
     private let transport = HelperConnection()
-    /// Short-lived poll that watches for the user's System Settings approval
-    /// (macOS never calls back when they flip the toggle).
     private var approvalPoll: Task<Void, Never>?
+
+    init() {
+        refreshStatus()
+    }
 
     private var service: SMAppService {
         SMAppService.daemon(plistName: HelperConstants.daemonPlistName)
@@ -145,16 +145,23 @@ final class HelperClient {
     func install() {
         do {
             try service.register()
+            refreshStatus()
+            if status == .requiresApproval {
+                openApprovalSettings()
+            }
         } catch {
             // "Already registered" / "operation in progress" are NOT real
             // failures — fall through to the true status. Only surface an
             // error if we genuinely can't tell where we stand.
             refreshStatus()
-            if status == .notInstalled { status = .failed(error.localizedDescription) }
+            if status == .notInstalled {
+                status = .failed(error.localizedDescription)
+            } else if status == .requiresApproval {
+                openApprovalSettings()
+            }
             beginApprovalPolling()
             return
         }
-        refreshStatus()
         beginApprovalPolling()
     }
 

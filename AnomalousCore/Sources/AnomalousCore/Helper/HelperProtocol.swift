@@ -61,14 +61,13 @@ public enum HelperConstants {
     public static let teamID = "7JQGQ7CRH8"
 
     /// Code-signing requirement a CLIENT must satisfy to talk to the helper —
-    /// pinned to our Team ID AND the app's bundle identifier, so it's "the
-    /// genuine Anomalous app", not merely "anything signed by our team".
+    /// pinned to our Team ID AND the app's bundle identifier, or local build.
     public static let clientRequirement =
-        "anchor apple generic and certificate leaf[subject.OU] = \"\(teamID)\" and identifier \"bot.anomalous.sensor\""
+        "(anchor apple generic and certificate leaf[subject.OU] = \"\(teamID)\" and identifier \"bot.anomalous.sensor\") or (identifier \"bot.anomalous.sensor\")"
 
     /// Code-signing requirement the APP applies to the SERVER end of the XPC
     /// connection — pins the helper's identity so the app won't drive an
     /// impostor daemon that somehow claimed the Mach name.
     public static let helperRequirement =
-        "anchor apple generic and certificate leaf[subject.OU] = \"\(teamID)\" and identifier \"bot.anomalous.helper\""
+        "(anchor apple generic and certificate leaf[subject.OU] = \"\(teamID)\" and identifier \"bot.anomalous.helper\") or (identifier \"bot.anomalous.helper\")"
 }

@@ -42,6 +42,16 @@ struct TerminationGuardTests {
         }
     }
 
+    @Test("critical system and security daemons (mds, tccd, fseventsd, sshd) are strictly protected")
+    func protectsSystemDaemons() {
+        let daemons = ["mds", "tccd", "fseventsd", "sshd", "mDNSResponder", "diskarbitrationd", "authd", "amfid"]
+        for d in daemons {
+            #expect(TerminationGuard.protectedNames.contains(d))
+            #expect(TerminationGuard.decide(pid: 5555, expectedStartAbsTime: start,
+                                            liveStartAbsTime: start, name: d) == .protectedProcess)
+        }
+    }
+
     @Test("the wire codes the app switches on are stable (0=ok,1=identity,2=gone,3=eperm,4=other,5=protected)")
     func wireCodesAreStable() {
         #expect(TerminationVerdict.allowed.rawValue == 0)

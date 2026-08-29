@@ -598,16 +598,7 @@ struct DiagnosisCardView: View {
         Image(systemName: "info.circle.fill")
             .imageScale(.large)
             .foregroundStyle(urgencyTint(judged.urgency))
-            // Instant hover tip — the system .help() tooltip has a ~1s delay we
-            // can't shorten, so drive a popover straight off the hover state.
-            .onHover { attentionHovering = $0 }
-            .popover(isPresented: $attentionHovering, arrowEdge: .bottom) {
-                Text(urgencyTooltip(judged.urgency))
-                    .font(.callout)
-                    .padding(10)
-                    .frame(maxWidth: 240)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            .help(urgencyTooltip(judged.urgency))
             .accessibilityLabel(urgencyTooltip(judged.urgency))
     }
 
@@ -844,21 +835,24 @@ struct DiagnosisCardView: View {
             // Provenance caption — but only while the card is still a bare
             // knowledge-map entry. Once discovery has identified the process the
             // "Sourced by Anomalous" link is the provenance, so drop the
-            // "knowledge map only" / AI-unavailable captions (they'd contradict it).
+            // knowledge map / AI-unavailable captions (they'd contradict it).
             if !judged.judgedByModel && !judged.discovery.identifiesProcess {
-                if case .unavailable = AppleIntelligence.status {
+                if judged.genuinelyUnknown {
+                    // Unknown process awaiting discovery
+                } else if case .unavailable = AppleIntelligence.status {
                     Text("From the built-in knowledge map — turn on Apple Intelligence for richer diagnoses.")
-                        .font(.callout).foregroundStyle(.secondary)
+                        .font(.footnote).foregroundStyle(.secondary)
                 } else {
-                    Text("knowledge map only").font(.callout).foregroundStyle(.secondary)
+                    Text("From the built-in knowledge map")
+                        .font(.footnote).foregroundStyle(.tertiary)
                 }
             }
             // The model's plain "what's normal" read — one calm sentence on how
-            // far from usual this is (the precise figures are in the readout
-            // below). Rendered here so the generated field isn't wasted and the
-            // headline verdict has its supporting "normal for it" line.
-            if !judged.card.isThisNormal.isEmpty {
-                Text(judged.card.isThisNormal.sentenceCased)
+            // far from usual this is. Skip if it simply duplicates the lead glance line.
+            let normalSentence = judged.card.isThisNormal.trimmingCharacters(in: .whitespacesAndNewlines)
+            let glanceSentence = judged.glance.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalSentence.isEmpty && normalSentence.lowercased() != glanceSentence.lowercased() {
+                Text(normalSentence.sentenceCased)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1119,7 +1113,6 @@ struct DiagnosisCardView: View {
     /// The expert diagnosis that came back from paid triage — the receive
     /// half of "Get help". Shows the grounded answer + cited evidence links,
     /// or an honest note when the backend couldn't reason.
-    @ViewBuilder
     /// Render the inline markdown the expert answer emits (**bold**, [links](…)),
     /// preserving its line breaks — otherwise the asterisks show up literally.
     private func markdown(_ s: String) -> AttributedString {
@@ -1129,6 +1122,7 @@ struct DiagnosisCardView: View {
         )) ?? AttributedString(s)
     }
 
+    @ViewBuilder
     private func expertResult(_ result: EscalationClient.ExpertResult) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Divider().padding(.vertical, 2)
@@ -1212,14 +1206,14 @@ struct GetHelpControl: View {
     }
 }
 
-/// A compact, consistent "that didn't work — try again" affordance: a warning
+/// An inline, bounded error row with a subtle warning tint: a warning
 /// glyph, a plain-language message, and a real Retry button (not plain text) in
-/// a soft error-tinted pill. Used wherever a background operation the user
-/// kicked off can fail — expert help, discovery lookup — so failures read the
+/// a single grouped badge that matches the card's visual weight. Keeps retry the
 /// same everywhere instead of as bare orange text.
 struct InlineRetryError: View {
     let message: String
     let retry: () -> Void
+    @State private var isRetrying = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -1230,9 +1224,20 @@ struct InlineRetryError: View {
                 .font(.caption)
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("Retry", action: retry)
+            if isRetrying {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Button("Retry") {
+                    isRetrying = true
+                    retry()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        isRetrying = false
+                    }
+                }
                 .controlSize(.small)
                 .buttonStyle(.bordered)
+            }
         }
         .padding(.leading, 9)
         .padding(.trailing, 5)
@@ -1402,14 +1407,7 @@ struct GroupedAnomalyCard: View {
                 Image(systemName: "info.circle.fill")
                     .imageScale(.large)
                     .foregroundStyle(urgencyTint(representative.urgency))
-                    .onHover { attentionHovering = $0 }
-                    .popover(isPresented: $attentionHovering, arrowEdge: .bottom) {
-                        Text(urgencyTooltip(representative.urgency))
-                            .font(.callout)
-                            .padding(10)
-                            .frame(maxWidth: 240)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    .help(urgencyTooltip(representative.urgency))
                     .accessibilityLabel(urgencyTooltip(representative.urgency))
                 HStack(spacing: 5) {
                     Text(name)

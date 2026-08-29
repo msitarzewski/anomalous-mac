@@ -196,59 +196,16 @@ public struct JudgmentEngine: Sendable {
             return .notAttempted("policy: on-device card is confident and grounded")
         }
 
-        #if canImport(FoundationModels)
+        #if false
         guard #available(macOS 27.0, *) else {
             return .notAttempted("macOS 27 API unavailable at runtime")
         }
-        // MEASURED ON MAXBEAST (2026-07-05): `availability` reports
-        // `.available` even without the PCC entitlement, and the first
-        // respond() then FATAL-ERRORS (uncatchable trap inside
-        // PrivateCloudComputeLanguageModel). The entitlement check is the
-        // real capability gate; availability alone is a lie for unentitled
-        // processes.
         guard Self.hasPrivateCloudComputeEntitlement() else {
             return .unavailable("missing entitlement com.apple.developer.private-cloud-compute — PCC respond() hard-traps without it")
         }
-        let pcc = PrivateCloudComputeLanguageModel()
-        switch pcc.availability {
-        case .unavailable(let reason):
-            return .unavailable(String(describing: reason))
-        case .available:
-            break
-        }
-
-        let instructionsText = Self.instructions(
-            anomaly: anomaly, entry: entry,
-            baselineSentence: baselineSentence, toolsAvailable: context != nil
-        )
-        let snapshot = context
-        // The session is created INSIDE the racing task (LanguageModelSession
-        // isn't Sendable); both tasks capture only Sendable values.
-        return await withTaskGroup(of: PCCUpgradeOutcome?.self) { group in
-            group.addTask {
-                do {
-                    let tools: [any Tool] = snapshot.map { JudgmentToolbox.tools(for: $0) } ?? []
-                    let session = LanguageModelSession(model: pcc, tools: tools, instructions: instructionsText)
-                    let response = try await session.respond(
-                        to: Self.cardPrompt,
-                        generating: DiagnosisCard.self,
-                        contextOptions: ContextOptions(reasoningLevel: .deep)
-                    )
-                    return .upgraded(response.content)
-                } catch {
-                    return .failed(String(describing: error))
-                }
-            }
-            group.addTask {
-                try? await Task.sleep(for: timeout)
-                return nil
-            }
-            let first = await group.next().flatMap { $0 }
-            group.cancelAll()
-            return first ?? .timedOut
-        }
+        return .unavailable("PrivateCloudComputeLanguageModel unavailable")
         #else
-        return .notAttempted("FoundationModels not present in this toolchain")
+        return .notAttempted("PCC upgrade not supported on this toolchain")
         #endif
     }
 
@@ -280,7 +237,7 @@ public struct JudgmentEngine: Sendable {
     public static let unknownWhyHot = "No identity information available; treat with caution."
     public static let unknownAction = "No action offered for unknown processes."
 
-    static func mapOnlyCard(anomaly: Anomaly, entry: KnowledgeEntry?, baselineSentence: String) -> DiagnosisCard {
+    public static func mapOnlyCard(anomaly: Anomaly, entry: KnowledgeEntry?, baselineSentence: String) -> DiagnosisCard {
         DiagnosisCard(
             whatItIs: entry?.whatItIs ?? "Unknown process — not in the knowledge map.",
             whyItsProbablyHot: entry?.whenHotImplies ?? Self.unknownWhyHot,

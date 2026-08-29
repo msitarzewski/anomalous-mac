@@ -65,4 +65,22 @@ struct EscalationPayloadTests {
         #expect(entries.count == 1)
         #expect(entries.first?.flow == .triage)
     }
+
+    @Test("send log prunes old files and limits disk entries to max capacity")
+    func prunesDiskFiles() async throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "sendlog-prune-\(UUID().uuidString)")
+        let log = SendLog(directory: dir)
+        let sampleData = "{}".data(using: .utf8)!
+
+        for _ in 0..<110 {
+            _ = try await log.record(flow: .signature, payload: sampleData)
+        }
+
+        let allEntries = await log.all()
+        #expect(allEntries.count <= SendLog.maxEntries)
+
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        #expect(files.count <= SendLog.maxEntries)
+        try? FileManager.default.removeItem(at: dir)
+    }
 }

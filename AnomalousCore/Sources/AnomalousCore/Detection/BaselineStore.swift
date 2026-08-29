@@ -195,6 +195,10 @@ public actor BaselineStore {
     /// the most recently seen win.
     static let robustLineageCap = 2000
 
+    public static let baselinesCap = 1000
+    public static let baselinesTTL: TimeInterval = 30 * 86_400
+    public static let diagnosesTTL: TimeInterval = 30 * 86_400
+
     private let fileURL: URL
     private var snapshot: Snapshot
     private var loaded = false
@@ -216,20 +220,7 @@ public actor BaselineStore {
               let stored = try? JSONDecoder().decode(Snapshot.self, from: data)
         else { return }
         snapshot = stored
-        let cutoff = now.addingTimeInterval(-Self.flaggedTTL)
-        snapshot.flagged.removeAll { $0.flaggedAt < cutoff }
-        // Decay stale robust lineages, then cap the survivors (newest win).
-        let staleCutoff = now.addingTimeInterval(-Self.robustTTL)
-        snapshot.robust = snapshot.robust.filter { $0.value.lastSeen >= staleCutoff }
-        if snapshot.robust.count > Self.robustLineageCap {
-            let keep = Set(
-                snapshot.robust
-                    .sorted { $0.value.lastSeen > $1.value.lastSeen }
-                    .prefix(Self.robustLineageCap)
-                    .map(\.key)
-            )
-            snapshot.robust = snapshot.robust.filter { keep.contains($0.key) }
-        }
+        pruneExpiredFlags(now: now)
     }
 
     public func save() {
@@ -249,11 +240,36 @@ public actor BaselineStore {
         return snapshot.flagged.contains { $0.identity == identity && $0.flaggedAt >= cutoff }
     }
 
-    /// Drop expired flags from the in-memory set (call periodically so the
-    /// array doesn't grow unbounded across weeks of uptime).
-    public func pruneExpiredFlags() {
-        let cutoff = Date.now.addingTimeInterval(-Self.flaggedTTL)
+    /// Drop expired flags, stale baselines, and aged diagnoses from the in-memory set.
+    public func pruneExpiredFlags(now: Date = .now) {
+        let cutoff = now.addingTimeInterval(-Self.flaggedTTL)
         snapshot.flagged.removeAll { $0.flaggedAt < cutoff }
+
+        let staleCutoff = now.addingTimeInterval(-Self.robustTTL)
+        // Decay stale robust lineages, then cap the survivors (newest win).
+        snapshot.robust = snapshot.robust.filter { $0.value.lastSeen >= staleCutoff }
+        if snapshot.robust.count > Self.robustLineageCap {
+            let keep = Set(
+                snapshot.robust
+                    .sorted { $0.value.lastSeen > $1.value.lastSeen }
+                    .prefix(Self.robustLineageCap)
+                    .map(\.key)
+            )
+            snapshot.robust = snapshot.robust.filter { keep.contains($0.key) }
+        }
+
+        if snapshot.baselines.count > Self.baselinesCap {
+            let keep = Set(
+                snapshot.baselines
+                    .sorted { $0.value.lastSeen > $1.value.lastSeen }
+                    .prefix(Self.baselinesCap)
+                    .map(\.key)
+            )
+            snapshot.baselines = snapshot.baselines.filter { keep.contains($0.key) }
+        }
+
+        let diagCutoff = now.addingTimeInterval(-Self.diagnosesTTL)
+        snapshot.diagnoses = snapshot.diagnoses.filter { $0.value.cachedAt >= diagCutoff }
     }
 
     public func markFlagged(_ identity: ProcessIdentity, kind: Anomaly.Kind) {
@@ -279,18 +295,17 @@ public actor BaselineStore {
 
     /// Feed one tick's instantaneous readings (percent CPU since last tick,
     /// resident MB) — the caller computes deltas from its own history.
-    public func record(key: String, cpuPercent: Double, rssMB: Double) {
-        let now = Date.now
+    public func record(key: String, cpuPercent: Double, rssMB: Double, at date: Date = .now) {
         if var stats = snapshot.baselines[key] {
             stats.ewmaCPUPercent += Self.alpha * (cpuPercent - stats.ewmaCPUPercent)
             stats.ewmaRSSMB += Self.alpha * (rssMB - stats.ewmaRSSMB)
             stats.sampleCount += 1
-            stats.lastSeen = now
+            stats.lastSeen = date
             snapshot.baselines[key] = stats
         } else {
             snapshot.baselines[key] = BaselineStats(
                 ewmaCPUPercent: cpuPercent, ewmaRSSMB: rssMB,
-                sampleCount: 1, firstSeen: now, lastSeen: now
+                sampleCount: 1, firstSeen: date, lastSeen: date
             )
         }
     }

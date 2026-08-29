@@ -17,7 +17,7 @@ import AnomalousCore
 /// AppKit `NSWindow`s (hosting the same SwiftUI views), and views ask for them
 /// through `AppState` signals or `AppDelegate.shared`, never the environment.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     /// Bridge for popover-hosted SwiftUI views (which have no scene actions) to
     /// close the popover / open Settings. Set once the delegate is live.
     static weak var shared: AppDelegate?
@@ -60,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentViewController = host
         popover.behavior = .transient
         popover.animates = true
+        popover.delegate = self
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
@@ -95,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.image = quiet ? quietImage : activeImage
         button.image?.accessibilityDescription = quiet
             ? "Anomalous: nothing is wrong"
-            : "Anomalous: \(appState.anomalies.count) anomaly\(appState.anomalies.count == 1 ? "" : "ies") detected"
+            : "Anomalous: \(appState.anomalies.count) \(appState.anomalies.count == 1 ? "anomaly" : "anomalies") detected"
     }
 
     @objc private func togglePopover(_ sender: Any?) {
@@ -113,6 +114,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Popover-hosted views call this instead of the (inert) `dismiss()`.
     func closePopover() { popover.performClose(nil) }
+
+    // MARK: - NSPopoverDelegate
+
+    func popoverDidShow(_ notification: Notification) {
+        appState.popoverIsOpen = true
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        appState.popoverIsOpen = false
+    }
 
     // MARK: - Windows
 
@@ -153,16 +164,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    private var settingsWindowController: NSWindowController?
+
     /// Open the SwiftUI `Settings` scene from AppKit (the popover's `openSettings`
     /// is inert). Then force it frontmost — an accessory app's Settings window
     /// otherwise opens behind everything.
     func openSettingsWindow() {
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         NSApp.activate(ignoringOtherApps: true)
-        DispatchQueue.main.async {
-            NSApp.windows
-                .first { $0.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" }?
-                .makeKeyAndOrderFront(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self else { return }
+            if let settingsWin = NSApp.windows.first(where: { $0.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" }) {
+                settingsWin.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            } else {
+                if self.settingsWindowController == nil {
+                    let host = NSHostingController(rootView: SettingsView(appState: self.appState))
+                    let window = NSWindow(contentViewController: host)
+                    window.title = "Settings"
+                    window.identifier = NSUserInterfaceItemIdentifier("settings")
+                    window.styleMask = [.titled, .closable]
+                    window.setContentSize(NSSize(width: 560, height: 640))
+                    window.isReleasedWhenClosed = false
+                    window.center()
+                    self.settingsWindowController = NSWindowController(window: window)
+                }
+                self.settingsWindowController?.showWindow(nil)
+                self.settingsWindowController?.window?.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
         }
     }
 
