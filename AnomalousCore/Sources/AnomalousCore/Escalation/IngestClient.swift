@@ -30,7 +30,7 @@ public struct IngestClient: Sendable {
             request.setValue(value, forHTTPHeaderField: header)
         }
 
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await ServerOverridePolicy.data(for: request)
         return (response as? HTTPURLResponse)?.statusCode ?? 0
     }
 

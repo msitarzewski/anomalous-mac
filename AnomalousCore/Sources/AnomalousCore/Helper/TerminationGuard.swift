@@ -27,6 +27,12 @@ public enum TerminationGuard {
         "launchd", "kernel_task", "WindowServer", "loginwindow", "logind",
         "securityd", "syslogd", "notifyd", "opendirectoryd", "coreauthd",
         "trustd", "syspolicyd", "endpointsecurityd", "sysmond", "watchdogd",
+        // Privacy, code-signing, auth, networking, storage and power services.
+        // None may be offered a quit action by the knowledge map (tested).
+        "tccd", "amfid", "authd", "sshd", "configd", "mDNSResponder", "fseventsd",
+        "cfprefsd", "diskarbitrationd", "containermanagerd", "runningboardd",
+        "powerd", "bluetoothd", "wifid", "diagnosticd", "UserEventAgent",
+        "systemsoundserverd", "timed", "cron",
     ]
 
     /// Decide whether a termination is authorized. Defense in depth, in order:

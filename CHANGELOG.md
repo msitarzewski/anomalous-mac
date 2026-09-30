@@ -3,6 +3,40 @@
 All notable changes to the Anomalous macOS sensor. Dates are release dates;
 `0.2.3` (`CFBundleVersion` 9) is the latest release.
 
+## Unreleased
+
+- New vector app icon.
+- Home window, expanded diagnosis cards, and consistent settings-window navigation.
+- Energy-aware wakeup checks and conservative GPU activity descriptions: driver
+  counters are a relative activity index, not percent of whole-GPU capacity or
+  evidence of a continuously sustained cause.
+- Release configuration restrictions and explicit contribution consent.
+- Shared process safety guidance requires human review; unreviewed research
+  remains labeled as research.
+- Release tooling requires explicit artifacts and provisioning, and verifies the
+  public download before publishing its update feed.
+- Network documentation distinguishes contribution, discovery, account-linked
+  help, and inactive Private Cloud Compute.
+- Paid Get Help is retry-safe: a pending request is resent with the same
+  idempotency key, so retrying never charges twice.
+- App Attest registration is scoped to each server. Existing installs register
+  once more after updating; registrations made against another server are no
+  longer trusted.
+- Detection: rate rules use time-weighted recent windows, memory Verify checks
+  for continued growth, and chronic CPU alerts need a warm baseline plus current
+  activity, so steady legitimate work raises fewer alerts.
+- Lookup errors say what failed (service status, network, timeout) instead of a
+  generic message.
+- Sparkle is pinned to 2.9.4.
+- Homebrew service checks no longer hang when `brew` prints more than a pipe
+  buffer of output.
+- Enabling system-wide monitoring opens Login Items & Extensions when macOS
+  needs approval, and the monitoring status is correct from launch.
+- The root helper refuses to stop more core system services (for example
+  tccd, amfid, sshd, mDNSResponder and configd).
+- The menu-bar accessibility label says "anomalies" instead of "anomalyies".
+- Thanks to @fallenmaverick (PR #6) for reporting several of these.
+
 ## 0.2.3 *(2026-07-19)*
 
 Free-tier discovery now works in production.

@@ -1,0 +1,46 @@
+name: Mac verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # Xcode 27 APIs require the preview SDK; logs record its exact build.
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          xcrun --show-sdk-version
+          test "$(uname -m)" = arm64
+      - name: Generate project and resolve dependencies
+        run: |
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen --version
+          xcodegen generate
+          xcodebuild -resolvePackageDependencies -project Anomalous.xcodeproj -scheme Anomalous
+      - name: Core tests and coverage
+        run: swift test --package-path AnomalousCore --enable-code-coverage
+      - name: Release compilation
+        run: |
+          xcodebuild -project Anomalous.xcodeproj -scheme Anomalous \
+            -configuration Release -derivedDataPath build \
+            -onlyUsePackageVersionsFromResolvedFile CODE_SIGNING_ALLOWED=NO build
+      - name: Preserve coverage data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-core-coverage
+          path: |
+            AnomalousCore/.build/**/codecov/*
+            Anomalous.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+          if-no-files-found: warn

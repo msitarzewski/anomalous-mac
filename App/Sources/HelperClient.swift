@@ -126,6 +126,12 @@ final class HelperClient {
     /// (macOS never calls back when they flip the toggle).
     private var approvalPoll: Task<Void, Never>?
 
+    /// Read the real registration state at launch, so Settings and onboarding
+    /// are right before the popover first opens.
+    init() {
+        refreshStatus()
+    }
+
     private var service: SMAppService {
         SMAppService.daemon(plistName: HelperConstants.daemonPlistName)
     }
@@ -151,10 +157,14 @@ final class HelperClient {
             // error if we genuinely can't tell where we stand.
             refreshStatus()
             if status == .notInstalled { status = .failed(error.localizedDescription) }
+            if status == .requiresApproval { openApprovalSettings(); return }
             beginApprovalPolling()
             return
         }
         refreshStatus()
+        // The user just tapped Enable; take them to the switch macOS needs.
+        // (openApprovalSettings starts the approval poll itself.)
+        if status == .requiresApproval { openApprovalSettings(); return }
         beginApprovalPolling()
     }
 

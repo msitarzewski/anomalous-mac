@@ -8,8 +8,8 @@ import AnomalousCore
 /// The menu bar, popover, and the Home/Welcome windows are all owned by
 /// `AppDelegate` (AppKit `NSStatusItem` + `NSPopover`), because SwiftUI's
 /// `MenuBarExtra(.window)` mis-anchors its resizing panel. Only the `Settings`
-/// scene stays here — SwiftUI's `Settings` is opened from AppKit via
-/// `showSettingsWindow:` (see `AppDelegate.openSettingsWindow()`).
+/// scene stays here for command integration; Settings actions share the
+/// AppKit window owned by `AppDelegate.openSettingsWindow()`.
 @main
 struct AnomalousApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -18,6 +18,14 @@ struct AnomalousApp: App {
     var body: some Scene {
         Settings {
             SettingsView(appState: appState)
+        }
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    AppDelegate.shared?.openSettingsWindow()
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
         }
     }
 }

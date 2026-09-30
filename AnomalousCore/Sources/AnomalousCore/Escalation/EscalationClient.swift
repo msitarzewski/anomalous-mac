@@ -12,6 +12,18 @@ import Foundation
 public struct EscalationClient: Sendable {
     public struct Accepted: Sendable { public let id: Int }
 
+    /// Retained before sending so a lost response can be retried without a new charge.
+    public struct PendingSubmission: Codable, Sendable {
+        public let idempotencyKey: UUID
+        public let payload: PayloadComposer.TriagePayload
+        public var acceptedID: Int?
+
+        public init(payload: PayloadComposer.TriagePayload) {
+            self.idempotencyKey = UUID()
+            self.payload = payload
+        }
+    }
+
     /// The expert diagnosis returned by the recon backend — the same
     /// diagnosis-card shape the on-device model fills, plus cited evidence.
     public struct ExpertResult: Sendable, Equatable, Codable {
@@ -31,15 +43,14 @@ public struct EscalationClient: Sendable {
     }
 
     public enum EscalationError: Error, Equatable {
-        case unauthorized, insufficientBalance, server(Int), timedOut, insecureTransport
+        case unauthorized, insufficientBalance, requestRemoved, server(Int), timedOut, insecureTransport
     }
 
     /// Never send the account bearer token to a non-loopback host over cleartext
     /// HTTP. Loopback is allowed (local dev); anything else must be HTTPS.
     static func assertSecureTransport(_ url: URL) throws {
-        let host = url.host ?? ""
-        let isLoopback = host == "127.0.0.1" || host == "localhost" || host == "::1"
-        guard url.scheme == "https" || isLoopback else { throw EscalationError.insecureTransport }
+        do { try ServerOverridePolicy.assertSecureTransport(url) }
+        catch { throw EscalationError.insecureTransport }
     }
 
     public let baseURL: URL
@@ -52,19 +63,20 @@ public struct EscalationClient: Sendable {
         self.sendLog = sendLog
     }
 
-    public func escalate(_ payload: PayloadComposer.TriagePayload) async throws -> Accepted {
+    public func escalate(_ payload: PayloadComposer.TriagePayload, idempotencyKey: UUID = UUID()) async throws -> Accepted {
         try Self.assertSecureTransport(baseURL)
         let body = try JSONEncoder().encode(payload)
         _ = try await sendLog.record(flow: .triage, payload: body)
 
         var request = URLRequest(url: baseURL.appending(path: "/api/v1/triage"))
         request.httpMethod = "POST"
+        request.setValue(idempotencyKey.uuidString, forHTTPHeaderField: "Idempotency-Key")
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await ServerOverridePolicy.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         switch status {
         case 202:
@@ -73,6 +85,7 @@ public struct EscalationClient: Sendable {
             return Accepted(id: Int(id))
         case 401: throw EscalationError.unauthorized
         case 402: throw EscalationError.insufficientBalance
+        case 410: throw EscalationError.requestRemoved
         default: throw EscalationError.server(status)
         }
     }
@@ -81,13 +94,15 @@ public struct EscalationClient: Sendable {
     /// receive half — without it, escalation is fire-and-forget and the user
     /// never sees the answer they paid for.
     public func awaitResult(id: Int, attempts: Int = 20, interval: Duration = .seconds(2)) async throws -> ExpertResult {
+        try Self.assertSecureTransport(baseURL)
         for _ in 0..<attempts {
             var request = URLRequest(url: baseURL.appending(path: "/api/v1/triage/\(id)"))
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await ServerOverridePolicy.data(for: request)
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard code == 200 else {
+                if code == 404 || code == 410 { throw EscalationError.requestRemoved }
                 if code == 401 { throw EscalationError.unauthorized }
                 throw EscalationError.server(code)
             }

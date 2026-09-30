@@ -6,9 +6,19 @@ any of this — just [download the DMG](https://anomalous.bot).
 ## Requirements
 
 - macOS 26 (Tahoe) or later, Apple Silicon.
-- Xcode 26+ and [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
+- Xcode 27 and [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
 - Foundation Models (Apple Intelligence) for the on-device judgment layer; it
   degrades to knowledge-map-only cards where unavailable.
+
+Validation toolchain: Xcode 27.2 (`27B5019j`), Swift 6.4. The core test suite and
+Release compilation pass with this toolchain; an opt-in replay of private local
+history runs only when `ANOMALOUS_PRIVATE_REPLAY_DIR` is set.
+This does not replace signed runtime checks on macOS 26 and 27. The deployment
+target remains macOS 26; compiling the current source requires the newer SDK.
+CI uses GitHub's `xcode-27` preview runner, generates the ignored Xcode project,
+and records the resolved dependency lockfile with coverage artifacts. Preview
+runner availability and SDK revisions can change; inspect the recorded build
+number when comparing CI and local results.
 
 ## Build & run
 
@@ -47,6 +57,8 @@ End-to-end checklist. Signing secrets come from `~/.config/anomalous/signing.env
 3. **Appcast + publish to prod:**
    ```
    ./tools/sparkle-appcast.sh dist/rel-X.Y.Z   # EdDSA-signs the DMG
+   ./tools/publish-release.sh --verify-only dist/rel-X.Y.Z/Anomalous-X.Y.Z.dmg dist/rel-X.Y.Z/appcast.xml
+   # Load ANOMALOUS_RELEASE_HOST and ANOMALOUS_RELEASE_DIR from private operator configuration.
    ./tools/publish-release.sh dist/rel-X.Y.Z/Anomalous-X.Y.Z.dmg dist/rel-X.Y.Z/appcast.xml
    ```
 4. **Cut the GitHub release** — users expect the Releases tab:
@@ -58,13 +70,23 @@ End-to-end checklist. Signing secrets come from `~/.config/anomalous/signing.env
    set `version` + `sha256` (`shasum -a 256 dist/rel-X.Y.Z/Anomalous-X.Y.Z.dmg`) in
    `Casks/anomalous.rb` and push. Installs as `brew install --cask msitarzewski/tap/anomalous`.
 
-> Steps 4–5 are the easy ones to forget — they were missing through 0.2.1.
+Before publication, verify fresh installation and an upgrade from the previous
+release on supported macOS versions. Keep the prior signed artifacts and feed
+available for rollback. Signing and notarization alone do not establish runtime
+compatibility.
 
 ## Backend server (optional)
 
 Cloud triage, anonymous contribution, and account/billing talk to a backend —
 but the sensor is fully useful without one: local detection, judgment, and
-actions need no server. Set the backend host with the `ANOMALOUS_SERVER`
-environment variable (default `https://api.anomalous.bot`) to point the app at
-your own self-hosted backend. The wire contract every backend must speak is
-published in [`protocol/`](protocol/).
+actions need no server. Release builds restrict backend overrides to the production
+service and localhost. Debug builds accept custom HTTPS backends through
+`ANOMALOUS_SERVER`. The wire contract is published in [`protocol/`](protocol/).
+
+Release tools require an explicit `Release/Anomalous.app` path and signing fails
+if its required provisioning profile is missing. Keep operator destinations and
+credentials outside this public repository. Publishing checks the uploaded and
+publicly downloaded DMG checksum before replacing the appcast. `--verify-only`
+runs local signature, notarization, entitlement and appcast checks without a
+destination or network publication. The operator must provision destination
+ownership/ACLs for upload and web access; new published files use mode 0644.

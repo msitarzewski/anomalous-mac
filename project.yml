@@ -10,10 +10,10 @@ packages:
   # Sparkle auto-update (github.com/sparkle-project/Sparkle). SPM embeds
   # Sparkle.framework (with its XPC services + Autoupdate/Updater.app) into
   # the app bundle — these nested helpers MUST be Developer ID-signed at
-  # release time; see memory-bank/build-deployment.md.
+  # release time; see BUILD.md.
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    from: "2.9.4"
+    exactVersion: "2.9.4"
 
 schemes:
   Anomalous:
@@ -67,8 +67,8 @@ targets:
       properties:
         CFBundleDisplayName: Anomalous
         # Keep in lockstep with the app target's versions below.
-        CFBundleShortVersionString: "0.2.3"
-        CFBundleVersion: "9"
+        CFBundleShortVersionString: "0.3.0"
+        CFBundleVersion: "10"
         EXAppExtensionAttributes:
           EXExtensionPointIdentifier: com.apple.widgetkit-extension
     # xcodegen REGENERATES this file each `xcodegen generate` — the content
@@ -153,8 +153,8 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Anomalous
-        CFBundleShortVersionString: "0.2.3"
-        CFBundleVersion: "9"
+        CFBundleShortVersionString: "0.3.0"
+        CFBundleVersion: "10"
         LSUIElement: true
         LSMinimumSystemVersion: "26.0"
         # ── Sparkle auto-update ──────────────────────────────────────────
@@ -165,7 +165,7 @@ targets:
         SUEnableInstallerLauncher: true
         # PLACEHOLDER — the real EdDSA public key is injected at release time
         # from Sparkle's `generate_keys` (private key stays in the login
-        # Keychain and is NEVER committed). See memory-bank/build-deployment.md.
+        # Keychain and is NEVER committed). See BUILD.md.
         # DO NOT commit a real key here.
         SUPublicEDKey: "OoRc2WZfiHX21nhhm/inmv5l282Ob97GBwx+fZoML/E="
     settings:

@@ -42,8 +42,8 @@ public struct Anomaly: Sendable, Equatable {
             case .sustainedCPU, .cpuTimeRatio: return "High CPU"
             case .rssLeak, .memoryLeakFootprint: return "Memory climbing"
             case .rssCeiling: return "Very high memory"
-            case .gpuSaturation: return "GPU running hot"
-            case .energyWakeups: return "Draining the battery"
+            case .gpuSaturation: return "Unusual GPU activity"
+            case .energyWakeups: return "Unusual wakeup activity"
             case .diskThrash: return "Heavy disk activity"
             case .networkThroughput: return "Heavy network use"
             case .novelProcess: return "New, unrecognized process"
@@ -78,6 +78,9 @@ public struct Anomaly: Sendable, Equatable {
     /// Machine-wide caveat at detection time (thermal/memory duress), for
     /// the card and triage — nil when the machine was calm.
     public var systemContext: String?
+    /// The observed workload alone cannot establish harm; confidence needs
+    /// independent corroborating evidence before surfacing this candidate.
+    public var requiresCorroboration: Bool = false
 
     public init(
         kind: Kind,
@@ -90,7 +93,8 @@ public struct Anomaly: Sendable, Equatable {
         baselineDeviation: Double? = nil,
         confidence: Confidence = Confidence(score: 1),
         alsoObserved: [String] = [],
-        systemContext: String? = nil
+        systemContext: String? = nil,
+        requiresCorroboration: Bool = false
     ) {
         self.kind = kind
         self.identity = identity
@@ -103,6 +107,7 @@ public struct Anomaly: Sendable, Equatable {
         self.confidence = confidence
         self.alsoObserved = alsoObserved
         self.systemContext = systemContext
+        self.requiresCorroboration = requiresCorroboration
     }
 }
 
@@ -115,17 +120,13 @@ public struct DetectionThresholds: Sendable {
     /// Sustained CPU: average percent over the window that flags. (Rule 1)
     public var sustainedCPUPercent: Double = 80
     public var sustainedCPUWindow: TimeInterval = 25 * 60
-    /// Chronic CPU (Rule 1b): a process whose ROBUST TYPICAL CPU — the median
-    /// of its instantaneous CPU over the reservoir window — sits at/above this
-    /// floor has been hot the whole time we've watched it. This is the
-    /// baseline-poisoning blind spot: a runaway that predates a clean baseline
-    /// never SPIKES above the 80% live bar and never DEVIATES from its own
-    /// (now-poisoned) baseline, so Rules 1 and the Δ-rules both miss it. The
-    /// floor is absolute and lower than sustainedCPUPercent because ~50%+
-    /// sustained for a background process is pathological even though it never
-    /// hits 80% — and being absolute, a poisoned per-lineage baseline cannot
-    /// suppress it. Ship conservative; the ack envelope silences a user's own
-    /// known-heavy app ("normal for me").
+    /// Longest supported scheduler cadence plus collection/timer tolerance.
+    /// Larger gaps cannot establish a continuous observation window.
+    public var maximumSampleGap: TimeInterval = 6 * 60
+    /// Chronic CPU: a warm high historical median must be corroborated by
+    /// recent sustained CPU at this floor and a currently active process.
+    /// This catches persistently expensive processes without letting a stale
+    /// historical median create a new alert after the process becomes idle.
     public var chronicCPUPercent: Double = 50
     /// Cumulative-time ratio: cputime/uptime that flags with minimum uptime.
     /// This alone would have flagged dasd on FIRST LAUNCH of the app —
@@ -196,14 +197,13 @@ public struct DetectionThresholds: Sendable {
     /// number (RSS measured ~3× overstated in Phase 1), so its floor sits
     /// below the RSS floor.
     public var footprintFloorBytes: UInt64 = 256 * 1024 * 1024
-    /// gpu.saturation: absolute floor for the sustained per-process GPU
-    /// share. "Nobody's GPU dies at 5%" — a compositor blip that is 20 MADs
-    /// above a near-zero baseline is humanly silent; ~40% of the device
-    /// sustained for 10 minutes is a workload. (Parallel command queues can
-    /// legitimately push the Δ-share past 100% — the floor is deliberately
-    /// well below that.)
+    /// Legacy-scaled GPU activity index floor. This is not a calibrated share
+    /// of total device capacity; queue overlap and driver units remain relevant.
     public var gpuFloorPercent: Double = 40
     public var gpuWindow: TimeInterval = 10 * 60
+    /// Permit the scheduler's longest cadence (270s + 30s tolerance), with
+    /// margin for collection. Longer gaps cannot establish continuous coverage.
+    public var gpuMaximumSampleGap: TimeInterval = 6 * 60
     public var gpuMADMultiplier: Double = 8
     /// network.throughput: sustained bytes/s (in + out) way above the
     /// lineage's own baseline. The floor is conservative on purpose —
@@ -259,32 +259,44 @@ public enum DetectionRules {
         recentTicks: Int = 3
     ) -> Double? {
         guard history.count >= 2, recentTicks >= 1 else { return nil }
-        let window = history.suffix(recentTicks + 1)
-        let percents = zip(window, window.dropFirst()).compactMap { earlier, later -> Double? in
-            let dt = later.timestamp.timeIntervalSince(earlier.timestamp)
-            guard dt > 0 else { return nil }
-            return (later.cpuTimeSeconds - earlier.cpuTimeSeconds) / dt * 100
-        }
-        guard !percents.isEmpty else { return nil }
-        return percents.reduce(0, +) / Double(percents.count)
+        let window = Array(history.suffix(recentTicks + 1))
+        guard let first = window.first, let last = window.last,
+              let curve = recentRateCurve(history: window,
+                window: last.timestamp.timeIntervalSince(first.timestamp),
+                maximumGap: DetectionThresholds().maximumSampleGap,
+                delta: cpuDelta) else { return nil }
+        return curve.average * 100
     }
 
-    /// Live Δ-per-second of a cumulative counter over the last tick — the
-    /// instantaneous analogue of the window rules, for the Verify/heal check.
+    /// Latest valid adjacent interval. Missing data never bridges a gap.
     static func instantaneousRate(_ history: [ProcessSample], _ counter: (ProcessSample) -> Double) -> Double? {
+        latestRate(history) { a, b in
+            let ca = counter(a), cb = counter(b)
+            guard ca.isFinite, cb.isFinite, ca > 0, cb >= ca else { return nil }
+            return cb - ca
+        }
+    }
+
+    private static func latestRate(_ history: [ProcessSample], delta: (ProcessSample, ProcessSample) -> Double?) -> Double? {
         guard history.count >= 2 else { return nil }
         let a = history[history.count - 2], b = history[history.count - 1]
         let dt = b.timestamp.timeIntervalSince(a.timestamp)
-        let ca = counter(a), cb = counter(b)
-        guard dt > 0, cb >= ca, ca != 0 else { return nil }
-        return (cb - ca) / dt
+        guard a.identity == b.identity, dt > 0,
+              dt <= DetectionThresholds().maximumSampleGap,
+              let change = delta(a, b), change.isFinite, change >= 0 else { return nil }
+        return change / dt
     }
 
-    /// Live per-process GPU share RIGHT NOW (Δ gpuTime over Δ wall), the Verify
-    /// analogue of `instantaneousCPUPercent`. nil when it can't be computed.
+    /// Recent GPU activity index, not a whole-device utilization percentage.
     public static func instantaneousGPUPercent(history: [ProcessSample]) -> Double? {
-        instantaneousRate(history) { Double($0.gpuTimeMachAbs) * Collector.machTimebaseSecondsPerTick }
-            .map { $0 * 100 }
+        guard history.count >= 2 else { return nil }
+        let a = history[history.count - 2], b = history[history.count - 1]
+        let dt = b.timestamp.timeIntervalSince(a.timestamp)
+        guard a.identity == b.identity, dt > 0,
+              dt <= DetectionThresholds().gpuMaximumSampleGap,
+              a.gpuTimeMachAbs > 0, b.gpuTimeMachAbs >= a.gpuTimeMachAbs else { return nil }
+        return Double(b.gpuTimeMachAbs - a.gpuTimeMachAbs) / dt
+            * Collector.machTimebaseSecondsPerTick * 100
     }
 
     /// Is the acute condition STILL present RIGHT NOW? The Verify action's live
@@ -302,13 +314,33 @@ public enum DetectionRules {
         case .rssCeiling:
             return history.last.map { primaryMemoryBytes($0) >= thresholds.rssCeilingBytes }
         case .memoryLeakFootprint, .rssLeak:
-            return history.last.map { primaryMemoryBytes($0) >= thresholds.footprintFloorBytes }
+            guard history.count >= 2 else { return nil }
+            let a = history[history.count - 2], b = history[history.count - 1]
+            let dt = b.timestamp.timeIntervalSince(a.timestamp)
+            guard a.identity == b.identity, dt > 0, dt <= thresholds.maximumSampleGap else { return nil }
+            // Compare one consistent measurement: switching RSS/footprint would
+            // manufacture a jump. A high but stable allocation is not a leak.
+            let footprint = kind == .memoryLeakFootprint && a.physFootprintBytes > 0 && b.physFootprintBytes > 0
+            let before = footprint ? a.physFootprintBytes : a.residentBytes
+            let after = footprint ? b.physFootprintBytes : b.residentBytes
+            guard before > 0, after > 0 else { return nil }
+            let floor = footprint ? thresholds.footprintFloorBytes : thresholds.rssFloorBytes
+            return after >= floor && after > before
         case .energyWakeups:
-            return instantaneousRate(history) { Double($0.interruptWakeups) }.map { $0 >= thresholds.wakeupsFloorPerSecond }
+            guard let wakeups = instantaneousRate(history, { Double($0.interruptWakeups) }) else { return nil }
+            guard wakeups >= thresholds.wakeupsFloorPerSecond else { return false }
+            if let watts = instantaneousRate(history, { Double($0.energyNanojoules) / 1_000_000_000 }) {
+                return watts >= thresholds.wakeupsFloorPowerWatts
+            }
+            // Only uniformly unavailable energy permits the CPU fallback;
+            // a reset or partial missing reading cannot prove energy cost.
+            guard history.suffix(2).allSatisfy({ $0.energyNanojoules == 0 }) else { return nil }
+            return instantaneousCPUPercent(history: history, recentTicks: 1)
+                .map { $0 >= thresholds.wakeupsMinimumCPUPercent }
         case .diskThrash:
-            return instantaneousRate(history) { Double($0.diskBytesRead &+ $0.diskBytesWritten) }.map { $0 >= thresholds.diskFloorBytesPerSecond }
+            return latestRate(history, delta: diskDelta).map { $0 >= thresholds.diskFloorBytesPerSecond }
         case .networkThroughput:
-            return instantaneousRate(history) { Double($0.netBytesIn &+ $0.netBytesOut) }.map { $0 >= thresholds.networkFloorBytesPerSecond }
+            return latestRate(history, delta: networkDelta).map { $0 >= thresholds.networkFloorBytesPerSecond }
         case .novelProcess, .appHung:
             return nil   // no live metric — Verify can't instantly re-check these
         }
@@ -326,23 +358,17 @@ public enum DetectionRules {
         robust: RobustStats? = nil,
         thresholds: DetectionThresholds = .init()
     ) -> Anomaly? {
-        guard let first = history.first, let last = history.last else { return nil }
-        let span = last.timestamp.timeIntervalSince(first.timestamp)
-        guard span >= thresholds.sustainedCPUWindow else { return nil }
-
-        let percentCurve = zip(history, history.dropFirst()).compactMap { earlier, later -> Double? in
-            let dt = later.timestamp.timeIntervalSince(earlier.timestamp)
-            guard dt > 0 else { return nil }
-            return (later.cpuTimeSeconds - earlier.cpuTimeSeconds) / dt * 100
-        }
-        guard !percentCurve.isEmpty else { return nil }
-        let average = percentCurve.reduce(0, +) / Double(percentCurve.count)
+        guard let last = history.last,
+              let curve = recentRateCurve(history: history, window: thresholds.sustainedCPUWindow,
+                maximumGap: thresholds.maximumSampleGap, delta: cpuDelta) else { return nil }
+        let percentCurve = curve.rates.map { $0 * 100 }
+        let average = curve.average * 100
         guard average >= thresholds.sustainedCPUPercent else { return nil }
 
         return Anomaly(
             kind: .sustainedCPU,
             identity: last.identity,
-            windowSeconds: span,
+            windowSeconds: thresholds.sustainedCPUWindow,
             magnitudeCurve: downsample(percentCurve, to: 120),
             baselineValue: baseline,
             detectedAt: last.timestamp,
@@ -351,33 +377,32 @@ public enum DetectionRules {
         )
     }
 
-    /// Rule 1b: CHRONIC CPU — the baseline-poisoning catch. Keys on the ROBUST
-    /// MEDIAN of the lineage's instantaneous CPU over the reservoir window: if a
-    /// process's *typical* CPU is itself pathological (≥ chronicCPUPercent), the
-    /// process has been a runaway since before a healthy baseline could form.
-    /// That is exactly the case Rule 1 (needs an 80% live spike) and the Δ-rules
-    /// (need deviation from a baseline the runaway has already poisoned) both
-    /// miss. Absolute and baseline-independent — the poisoned baseline is the
-    /// signal, not the excuse. The median (not the mean) keeps a single idle dip
-    /// or spike from moving the verdict. `robust` is only non-nil once the
-    /// reservoir has enough observations, so this can't fire on a cold process.
+    /// Chronic CPU requires a warm high baseline AND current sustained work.
+    /// A historical median alone never establishes a current incident.
     public static func chronicCPUAnomaly(
         robust: RobustStats?,
         sample: ProcessSample,
-        observedSpan: TimeInterval? = nil,
+        history: [ProcessSample] = [],
         thresholds: DetectionThresholds = .init()
     ) -> Anomaly? {
-        guard let robust, robust.median >= thresholds.chronicCPUPercent else { return nil }
+        guard let robust, robust.count >= thresholds.warmUpObservations,
+              robust.median >= thresholds.chronicCPUPercent,
+              history.last?.identity == sample.identity,
+              history.last?.timestamp == sample.timestamp,
+              let current = latestRate(history, delta: cpuDelta),
+              current * 100 >= thresholds.cpuTimeRatioActivePercent,
+              let curve = recentRateCurve(history: history, window: thresholds.sustainedCPUWindow,
+                maximumGap: thresholds.maximumSampleGap, delta: cpuDelta),
+              curve.average * 100 >= thresholds.chronicCPUPercent else { return nil }
         return Anomaly(
             kind: .sustainedCPU,
             identity: sample.identity,
-            // The real span we've observed it hot for (the reservoir window),
-            // not a fixed nominal window — the card states an honest duration.
-            windowSeconds: observedSpan ?? thresholds.sustainedCPUWindow,
-            magnitudeCurve: [robust.median],
+            windowSeconds: thresholds.sustainedCPUWindow,
+            magnitudeCurve: downsample(curve.rates.map { $0 * 100 }, to: 120),
             baselineValue: robust.median,
             detectedAt: sample.timestamp,
-            drivingMetric: BaselineMetric.cpuPercent.rawValue
+            drivingMetric: BaselineMetric.cpuPercent.rawValue,
+            requiresCorroboration: true
         )
     }
 
@@ -535,39 +560,71 @@ public enum DetectionRules {
 
     // MARK: - Phase 2 Δ-rate rules (cumulative counters → rate-over-window)
 
-    /// Δ-rate curve for a CUMULATIVE counter: per-pair (later − earlier)/Δt.
-    /// A 0 read means UNKNOWN (stale helper / V4 fallback) — excluded, never
-    /// treated as a reset to zero; counter regressions (shouldn't happen
-    /// within one identity, but never trust a kernel counter blindly) are
-    /// dropped the same way. nil unless the KNOWN readings span `window` —
-    /// a rate judged from a shorter stretch isn't "sustained".
-    static func rateCurve(
-        history: [ProcessSample],
-        window: TimeInterval,
-        counter: (ProcessSample) -> UInt64
-    ) -> (rates: [Double], span: TimeInterval)? {
-        let known = history.filter { counter($0) != 0 }
-        guard let first = known.first, let last = known.last else { return nil }
-        let span = last.timestamp.timeIntervalSince(first.timestamp)
-        guard span >= window else { return nil }
-        let rates = zip(known, known.dropFirst()).compactMap { earlier, later -> Double? in
-            let dt = later.timestamp.timeIntervalSince(earlier.timestamp)
-            let delta = Double(counter(later)) - Double(counter(earlier))
-            guard dt > 0, delta >= 0 else { return nil }
-            return delta / dt
+    /// A fully covered recent window, weighted by elapsed time. Clip the
+    /// oldest interval at the boundary; never splice across unavailable data.
+    static func recentRateCurve(
+        history: [ProcessSample], window: TimeInterval, maximumGap: TimeInterval,
+        delta: (ProcessSample, ProcessSample) -> Double?
+    ) -> (rates: [Double], average: Double)? {
+        guard history.count >= 2, window.isFinite, window > 0, maximumGap > 0 else { return nil }
+        var remaining = window
+        var total = 0.0
+        var rates: [Double] = []
+        for i in stride(from: history.count - 1, through: 1, by: -1) {
+            let a = history[i - 1], b = history[i]
+            let dt = b.timestamp.timeIntervalSince(a.timestamp)
+            guard a.identity == b.identity, dt > 0, dt <= maximumGap,
+                  let change = delta(a, b), change.isFinite, change >= 0 else { return nil }
+            let rate = change / dt
+            let covered = min(dt, remaining)
+            total += rate * covered
+            rates.append(rate)
+            remaining -= covered
+            if remaining <= 0 { return (rates.reversed(), total / window) }
         }
-        return rates.isEmpty ? nil : (rates, span)
+        return nil
     }
 
-    /// Sustained power (watts) attributable to a process over `window`, from
-    /// the cumulative per-process energy counter (nanojoules). nil when energy
-    /// is unreported for the window (V4/stale kernels leave it 0 → `rateCurve`
-    /// finds no known span) — callers fall back to a CPU-work proxy. 1 W = 1e9
-    /// nJ/s, so the average Δ-rate divided by 1e9 is watts.
-    static func sustainedPowerWatts(history: [ProcessSample], window: TimeInterval) -> Double? {
-        guard let (rates, _) = rateCurve(history: history, window: window, counter: { $0.energyNanojoules }) else { return nil }
-        let averageNanojoulesPerSecond = rates.reduce(0, +) / Double(rates.count)
-        return averageNanojoulesPerSecond / 1_000_000_000
+    private static func cpuDelta(_ a: ProcessSample, _ b: ProcessSample) -> Double? {
+        guard a.cpuTimeSeconds.isFinite, b.cpuTimeSeconds.isFinite,
+              a.cpuTimeSeconds >= 0, b.cpuTimeSeconds >= a.cpuTimeSeconds else { return nil }
+        return b.cpuTimeSeconds - a.cpuTimeSeconds
+    }
+
+    private static func counterDelta(_ a: UInt64, _ b: UInt64) -> Double? {
+        guard a > 0, b >= a else { return nil }
+        return Double(b - a)
+    }
+
+    private static func pairedDelta(_ a1: UInt64, _ a2: UInt64, _ b1: UInt64, _ b2: UInt64) -> Double? {
+        guard a1 > 0 || a2 > 0, b1 >= a1, b2 >= a2 else { return nil }
+        return Double(b1 - a1) + Double(b2 - a2)
+    }
+
+    private static func diskDelta(_ a: ProcessSample, _ b: ProcessSample) -> Double? {
+        pairedDelta(a.diskBytesRead, a.diskBytesWritten, b.diskBytesRead, b.diskBytesWritten)
+    }
+
+    private static func networkDelta(_ a: ProcessSample, _ b: ProcessSample) -> Double? {
+        pairedDelta(a.netBytesIn, a.netBytesOut, b.netBytesIn, b.netBytesOut)
+    }
+
+    static func rateCurve(
+        history: [ProcessSample], window: TimeInterval,
+        maximumGap: TimeInterval = DetectionThresholds().maximumSampleGap,
+        counter: (ProcessSample) -> UInt64
+    ) -> (rates: [Double], span: TimeInterval, average: Double)? {
+        guard let curve = recentRateCurve(history: history, window: window, maximumGap: maximumGap,
+            delta: { counterDelta(counter($0), counter($1)) }) else { return nil }
+        return (curve.rates, window, curve.average)
+    }
+
+    /// Mean watts over the same fully covered interval as wakeup detection.
+    static func sustainedPowerWatts(history: [ProcessSample], window: TimeInterval,
+                                    maximumGap: TimeInterval = DetectionThresholds().maximumSampleGap) -> Double? {
+        guard let curve = rateCurve(history: history, window: window, maximumGap: maximumGap,
+            counter: { $0.energyNanojoules }) else { return nil }
+        return curve.average / 1_000_000_000
     }
 
     /// Rule 8 (energy.wakeups): sustained interrupt-wakeup rate far above
@@ -587,10 +644,9 @@ public enum DetectionRules {
         thresholds: DetectionThresholds = .init()
     ) -> Anomaly? {
         guard let baseline, baseline.stats.count >= thresholds.warmUpObservations else { return nil }
-        guard let (rates, span) = rateCurve(history: history, window: thresholds.wakeupsWindow, counter: { $0.interruptWakeups }),
+        guard let (rates, span, average) = rateCurve(history: history, window: thresholds.wakeupsWindow, maximumGap: thresholds.maximumSampleGap, counter: { $0.interruptWakeups }),
               let last = history.last
         else { return nil }
-        let average = rates.reduce(0, +) / Double(rates.count)
         guard average >= thresholds.wakeupsFloorPerSecond else { return nil }
         let deviation = RobustMath.deviation(average, from: baseline.stats)
         guard deviation >= thresholds.wakeupsMADMultiplier else { return nil }
@@ -601,17 +657,15 @@ public enum DetectionRules {
         // draw, which is machine-fair (unlike the raw wake count). Gate on
         // sustained watts when the kernel reports energy; fall back to the CPU%
         // work proxy only when it doesn't (V4/stale → energy 0).
-        if let watts = sustainedPowerWatts(history: history, window: thresholds.wakeupsWindow) {
+        if let watts = sustainedPowerWatts(history: history, window: thresholds.wakeupsWindow, maximumGap: thresholds.maximumSampleGap) {
             guard watts >= thresholds.wakeupsFloorPowerWatts else { return nil }
         } else {
-            let cpuWindow = history.suffix(rates.count + 1)
-            let cpuRates = zip(cpuWindow, cpuWindow.dropFirst()).compactMap { earlier, later -> Double? in
-                let dt = later.timestamp.timeIntervalSince(earlier.timestamp)
-                guard dt > 0 else { return nil }
-                return (later.cpuTimeSeconds - earlier.cpuTimeSeconds) / dt * 100
-            }
-            let averageCPU = cpuRates.isEmpty ? 0 : cpuRates.reduce(0, +) / Double(cpuRates.count)
-            guard averageCPU >= thresholds.wakeupsMinimumCPUPercent else { return nil }
+            let cutoff = last.timestamp.addingTimeInterval(-thresholds.wakeupsWindow)
+            let start = history.lastIndex(where: { $0.timestamp <= cutoff }) ?? history.startIndex
+            guard history[start...].allSatisfy({ $0.energyNanojoules == 0 }),
+                  let cpu = recentRateCurve(history: history, window: thresholds.wakeupsWindow,
+                    maximumGap: thresholds.maximumSampleGap, delta: cpuDelta),
+                  cpu.average * 100 >= thresholds.wakeupsMinimumCPUPercent else { return nil }
         }
         return Anomaly(
             kind: .energyWakeups,
@@ -638,17 +692,18 @@ public enum DetectionRules {
         thresholds: DetectionThresholds = .init()
     ) -> Anomaly? {
         guard let baseline, baseline.stats.count >= thresholds.warmUpObservations else { return nil }
-        guard let (rates, span) = rateCurve(history: history, window: thresholds.diskWindow, counter: { $0.diskBytesRead &+ $0.diskBytesWritten }),
-              let last = history.last
-        else { return nil }
-        let average = rates.reduce(0, +) / Double(rates.count)
+        guard let curve = recentRateCurve(history: history, window: thresholds.diskWindow,
+            maximumGap: thresholds.maximumSampleGap, delta: diskDelta),
+              let last = history.last else { return nil }
+        let rates = curve.rates
+        let average = curve.average
         guard average >= thresholds.diskFloorBytesPerSecond else { return nil }
         let deviation = RobustMath.deviation(average, from: baseline.stats)
         guard deviation >= thresholds.diskMADMultiplier else { return nil }
         return Anomaly(
             kind: .diskThrash,
             identity: last.identity,
-            windowSeconds: span,
+            windowSeconds: thresholds.diskWindow,
             magnitudeCurve: downsample(rates.map { $0 / 1_048_576 }, to: 120),
             baselineValue: baseline.stats.median / 1_048_576,
             detectedAt: last.timestamp,
@@ -657,15 +712,20 @@ public enum DetectionRules {
         )
     }
 
-    /// Rule 10 (gpu.saturation): sustained per-process GPU share far above
-    /// the lineage's own baseline. `gpuTimeMachAbs` is cumulative GPU time in
-    /// mach-absolute ticks, so the Δ-rate (ticks/s) × secondsPerTick × 100 is
-    /// "percent of one GPU-second per wall-second" — the same unit the
-    /// baseline records (tickObservations). Same gate structure as
-    /// wakeups/disk: warm-up, absolute floor (nobody's GPU dies at 5% — the
-    /// floor sits at a sustained real workload), then MADs above the selected
-    /// seasonal-when-warm baseline. `secondsPerTick` is injectable so the
-    /// fixture tests are timebase-independent.
+    /// The most recent fully observed GPU window. Missing counters, resets,
+    /// identity changes and long sampling gaps break continuity. Interval rates
+    /// are weighted by their duration, clipping only the oldest interval to the
+    /// requested window. No older workload can keep a recovered process hot.
+    static func recentGPUCurve(
+        history: [ProcessSample], window: TimeInterval, maximumGap: TimeInterval
+    ) -> (rates: [Double], average: Double)? {
+        recentRateCurve(history: history, window: window, maximumGap: maximumGap,
+            delta: { counterDelta($0.gpuTimeMachAbs, $1.gpuTimeMachAbs) })
+    }
+
+    /// Rule 10: recent GPU activity above the lineage's own baseline. The
+    /// historical counter scaling is retained until driver units and baseline
+    /// migration are validated; it is not a calibrated device-capacity fraction.
     public static func gpuSaturationAnomaly(
         history: [ProcessSample],
         baseline: SelectedBaseline?,
@@ -673,18 +733,19 @@ public enum DetectionRules {
         secondsPerTick: Double = Collector.machTimebaseSecondsPerTick
     ) -> Anomaly? {
         guard let baseline, baseline.stats.count >= thresholds.warmUpObservations else { return nil }
-        guard let (rates, span) = rateCurve(history: history, window: thresholds.gpuWindow, counter: { $0.gpuTimeMachAbs }),
+        guard let (rates, rawAverage) = recentGPUCurve(
+            history: history, window: thresholds.gpuWindow, maximumGap: thresholds.gpuMaximumSampleGap),
               let last = history.last
         else { return nil }
         let percents = rates.map { $0 * secondsPerTick * 100 }
-        let average = percents.reduce(0, +) / Double(percents.count)
+        let average = rawAverage * secondsPerTick * 100
         guard average >= thresholds.gpuFloorPercent else { return nil }
         let deviation = RobustMath.deviation(average, from: baseline.stats)
         guard deviation >= thresholds.gpuMADMultiplier else { return nil }
         return Anomaly(
             kind: .gpuSaturation,
             identity: last.identity,
-            windowSeconds: span,
+            windowSeconds: thresholds.gpuWindow,
             magnitudeCurve: downsample(percents, to: 120),
             baselineValue: baseline.stats.median,
             detectedAt: last.timestamp,
@@ -705,17 +766,18 @@ public enum DetectionRules {
         thresholds: DetectionThresholds = .init()
     ) -> Anomaly? {
         guard let baseline, baseline.stats.count >= thresholds.warmUpObservations else { return nil }
-        guard let (rates, span) = rateCurve(history: history, window: thresholds.networkWindow, counter: { $0.netBytesIn &+ $0.netBytesOut }),
-              let last = history.last
-        else { return nil }
-        let average = rates.reduce(0, +) / Double(rates.count)
+        guard let curve = recentRateCurve(history: history, window: thresholds.networkWindow,
+            maximumGap: thresholds.maximumSampleGap, delta: networkDelta),
+              let last = history.last else { return nil }
+        let rates = curve.rates
+        let average = curve.average
         guard average >= thresholds.networkFloorBytesPerSecond else { return nil }
         let deviation = RobustMath.deviation(average, from: baseline.stats)
         guard deviation >= thresholds.networkMADMultiplier else { return nil }
         return Anomaly(
             kind: .networkThroughput,
             identity: last.identity,
-            windowSeconds: span,
+            windowSeconds: thresholds.networkWindow,
             magnitudeCurve: downsample(rates.map { $0 / 1_048_576 }, to: 120),
             baselineValue: baseline.stats.median / 1_048_576,
             detectedAt: last.timestamp,

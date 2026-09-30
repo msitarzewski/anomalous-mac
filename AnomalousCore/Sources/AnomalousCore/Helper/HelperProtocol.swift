@@ -52,7 +52,7 @@ public enum HelperConstants {
     /// helper after an update and self-heal it (see restartForUpdate). Treat
     /// this like the helper's build number: if it can go out of sync with the
     /// app, bump it.
-    public static let version = "0.1.6"
+    public static let version = "0.1.7"
 
     /// Apple Developer Team ID. The root helper accepts XPC connections ONLY
     /// from clients signed by this team — so a malicious local process can't

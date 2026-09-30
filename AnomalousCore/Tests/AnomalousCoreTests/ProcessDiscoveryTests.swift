@@ -2,6 +2,30 @@ import Testing
 import Foundation
 @testable import AnomalousCore
 
+@Suite("Discovery failure reporting")
+struct DiscoveryFailureTests {
+    @Test func attestationRegistrationIsBoundToItsServer() {
+        let production = AppAttestService.registrationKeys(for: URL(string: "https://api.anomalous.bot")!)
+        let development = AppAttestService.registrationKeys(for: URL(string: "http://localhost:8787")!)
+        #expect(production.keyID != development.keyID)
+        #expect(production.registered != development.registered)
+        #expect(production.keyID != "appAttestKeyId")
+        #expect(production.registered != "appAttestRegistered")
+        #expect(production.keyID == AppAttestService.registrationKeys(for: URL(string: "https://api.anomalous.bot")!).keyID)
+    }
+    @Test func serverRepliesAreNotConnectionFailures() {
+        #expect(DiscoveryClient.failureMessage(for: DiscoveryClient.DiscoveryError.server(429)) == "Lookup rate limit reached — try again shortly")
+        #expect(DiscoveryClient.failureMessage(for: DiscoveryClient.DiscoveryError.server(503)) == "Lookup failed (HTTP 503)")
+        #expect(DiscoveryClient.DiscoveryError.server(403).localizedDescription == "Lookup returned HTTP 403")
+    }
+
+    @Test func transportAndLocalErrorsRemainDistinct() {
+        #expect(DiscoveryClient.failureMessage(for: URLError(.timedOut)) == "Lookup timed out")
+        #expect(DiscoveryClient.failureMessage(for: URLError(.notConnectedToInternet)) == "Couldn't connect to the lookup service")
+        #expect(DiscoveryClient.failureMessage(for: CocoaError(.fileWriteNoPermission)) == "Couldn't complete the lookup")
+    }
+}
+
 // MARK: - #1 On-device routing: the unknown-process gate
 
 @Suite("on-device gate — a bundle names the app; a mystery daemon does not")

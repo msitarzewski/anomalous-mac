@@ -21,7 +21,7 @@ struct CorpusFeedTests {
        "causally_linked":["appstoreagent","BiomeAgent"],
        "sources":[{"url":"https://example.com/dasd/analysis","note":"fleet café review — émigré build"}],
        "platform":"macos",
-       "corrected_by":null},
+       "source":"reviewed","corrected_by":null},
       {"process_name":"cloudphotod",
        "display_name":"iCloud Photos Daemon",
        "what_it_is":"Syncs the Photos library with iCloud.",
@@ -33,7 +33,7 @@ struct CorpusFeedTests {
        "causally_linked":[],
        "sources":[],
        "platform":"macos",
-       "corrected_by":null}
+       "source":"reviewed","corrected_by":null}
     ]
     """
 
@@ -188,7 +188,7 @@ struct CorpusFeedTests {
           "what_it_is":"Apple's background-activity scheduler.",
           "owned_by":"Apple","when_hot_implies":"Under investigation.",
           "safety_tier":3,"safe_action":null,"worst_case":null,
-          "causally_linked":[],"sources":[],"platform":"macos","corrected_by":"community-pr-12"}]
+          "causally_linked":[],"sources":[],"platform":"macos","source":"reviewed","corrected_by":"community-pr-12"}]
         """
         let client = makeClient(
             body: Self.envelope(dataJSON: retraction, signature: nil, keyID: nil),
@@ -202,13 +202,28 @@ struct CorpusFeedTests {
         #expect(dasd.safeAction == nil)
     }
 
+    @Test("previously signed automated corpus cannot override shipped safety")
+    func legacyAutomatedCorpusExcluded() async throws {
+        let automated = Self.dataJSON.replacingOccurrences(of: "\"source\":\"reviewed\"", with: "\"source\":\"anomalous\"")
+        let key = Curve25519.Signing.PrivateKey()
+        let values = try JSONDecoder().decode([CanonicalJSONValue].self, from: Data(automated.utf8))
+        let bytes = try CanonicalJSONValue.canonicalBytes(of: .array(values))
+        let signature = try key.signature(for: bytes).base64EncodedString()
+        let client = makeClient(body: Self.envelope(dataJSON: automated, signature: signature, keyID: "test"),
+                                keys: ["test": key.publicKey.rawRepresentation.base64EncodedString()], storeURL: tempStore())
+        #expect(try await client.refresh() == .updated(entryCount: 2))
+        #expect(client.persistedKnowledgeEntries().isEmpty)
+        let shipped = try KnowledgeMap.shipped()
+        #expect(client.mergedKnowledgeMap(base: shipped).entry(forProcessName: "dasd")?.whenHotImplies == shipped.entry(forProcessName: "dasd")?.whenHotImplies)
+    }
+
     @Test("non-macOS entries don't match locally")
     func platformFilter() async throws {
         let cross = """
         [{"process_name":"svchost.exe","display_name":"Service Host",
           "what_it_is":"Windows service host.","owned_by":"Microsoft",
           "when_hot_implies":"n/a","safety_tier":3,"safe_action":null,
-          "worst_case":null,"causally_linked":[],"sources":[],"platform":"windows","corrected_by":null}]
+          "worst_case":null,"causally_linked":[],"sources":[],"platform":"windows","source":"reviewed","corrected_by":null}]
         """
         let client = makeClient(
             body: Self.envelope(dataJSON: cross, signature: nil, keyID: nil),
@@ -321,7 +336,7 @@ struct CorpusFeedTests {
         {"fetchedAt":"2026-07-05T00:00:00Z","keyID":null,
          "entries":[{"process_name":"evil","display_name":"Evil","what_it_is":"malware posing as Apple",
            "owned_by":"Apple","when_hot_implies":"nothing","safety_tier":3,"safe_action":null,
-           "worst_case":null,"causally_linked":[],"platform":"macos","corrected_by":null}]}
+           "worst_case":null,"causally_linked":[],"platform":"macos","source":"reviewed","corrected_by":null}]}
         """
         try Data(legacy.utf8).write(to: store)
 

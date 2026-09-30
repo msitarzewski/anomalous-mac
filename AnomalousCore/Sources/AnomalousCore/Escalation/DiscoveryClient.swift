@@ -28,7 +28,29 @@ public struct DiscoveryClient: Sendable {
         self.attestation = attestation
     }
 
-    public enum DiscoveryError: Error, Equatable { case server(Int), timedOut }
+    public enum DiscoveryError: LocalizedError, Equatable {
+        case server(Int), timedOut
+
+        public var errorDescription: String? {
+            switch self {
+            case .server(let status): return "Lookup returned HTTP \(status)"
+            case .timedOut: return "Lookup timed out"
+            }
+        }
+    }
+
+    public static func failureMessage(for error: Error) -> String {
+        switch error {
+        case DiscoveryError.server(429): return "Lookup rate limit reached — try again shortly"
+        case DiscoveryError.server(401), DiscoveryError.server(403): return "The service couldn't verify this app"
+        case DiscoveryError.server(let status): return "Lookup failed (HTTP \(status))"
+        case DiscoveryError.timedOut: return "Lookup timed out"
+        case let error as URLError where error.code == .timedOut: return "Lookup timed out"
+        case is URLError: return "Couldn't connect to the lookup service"
+        case is DecodingError: return "Couldn't read the lookup response"
+        default: return "Couldn't complete the lookup"
+        }
+    }
 
     // MARK: - Request (anonymous by construction)
 
@@ -223,7 +245,7 @@ public struct DiscoveryClient: Sendable {
             req.setValue(value, forHTTPHeaderField: header)
         }
 
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await ServerOverridePolicy.data(for: req)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 || code == 202 else { throw DiscoveryError.server(code) }
         return try Self.decodeSubmission(data)
@@ -235,7 +257,7 @@ public struct DiscoveryClient: Sendable {
     public func poll(discoveryID: String) async throws -> PollResult {
         var req = URLRequest(url: baseURL.appending(path: "/api/v1/discover/\(discoveryID)"))
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await ServerOverridePolicy.data(for: req)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else { throw DiscoveryError.server(code) }
         return try Self.decodePoll(data)

@@ -1,29 +1,11 @@
 import Foundation
 import IOKit
 
-/// Per-process GPU attribution via the IOKit registry (Phase 5). The AGX
-/// accelerator publishes one `AGXDeviceUserClient` node per GPU-using process;
-/// each carries `IOUserClientCreator` ("pid N, procname") and an `AppUsage`
-/// array whose entries hold `accumulatedGPUTime` — cumulative GPU time in
-/// mach-absolute ticks. Δ over ticks = per-process GPU share, the same
-/// cumulative-counter pattern as the rusage fields (0 = unknown, rates judged
-/// Δ-over-window, never absolute).
-///
-/// ⚠️ PRIVATE SURFACE — undocumented registry properties, not SPI symbols:
-/// this reads only IORegistry properties through fully public IOKit calls, so
-/// there is no signature to get wrong (the hung-probe lesson doesn't apply),
-/// but the property NAMES and SHAPES are Apple-internal and can change any
-/// release. Every read degrades to "absent": a missing/renamed property
-/// yields an empty map / nil snapshot, never a crash, and the GPU dimension
-/// simply goes dark for that tick.
-///
-/// Verified on-device (M5 Max, macOS 27.0, AGXAcceleratorG17X, 2026-07-05):
-/// 103 clients, 37 with AppUsage, WindowServer/root clients visible
-/// UNPRIVILEGED — no helper brokering needed for visibility (both tiers still
-/// read it so root-tier samples are complete on their own).
-///
-/// Budget: GPU clients are FEW (~100 registry nodes, 2 property reads each) —
-/// we enumerate IOAccelerator children, never scan the ~900-process table.
+/// Reads per-process GPU activity from undocumented AGX registry properties
+/// through public IOKit calls. `AppUsage` entries are driver accounting records;
+/// they are not documented as disjoint queues or a device-capacity fraction.
+/// Raw sums retain their historical field representation for compatibility.
+/// Unit calibration and client-lifecycle continuity require separate validation.
 public enum GPUSampler {
     /// The accelerator's device-level `PerformanceStatistics` — machine-wide
     /// GPU context for SystemSignals (the per-process story is `gpuTimeByPID`).
@@ -50,11 +32,9 @@ public enum GPUSampler {
 
     /// One tick's read: cumulative GPU time per pid + the device snapshot.
     public struct Reading: Sendable {
-        /// pid → summed `accumulatedGPUTime` (mach-absolute ticks) across all
-        /// of that pid's user clients and command queues. Cumulative — a pid
-        /// absent here reads 0 (= unknown) on its sample. Note the sum can
-        /// DECREASE when a client closes; the Δ-rate machinery already drops
-        /// counter regressions, so that reads as a gap, never a negative rate.
+        /// pid → raw sum of accumulatedGPUTime across visible client entries.
+        /// Zero means unavailable. Client creation/removal can change this sum;
+        /// a nondecreasing total alone cannot prove continuity of the clients.
         public let gpuTimeByPID: [pid_t: UInt64]
         public let device: DeviceSnapshot?
 
@@ -74,6 +54,7 @@ public enum GPUSampler {
         defer { IOObjectRelease(iterator) }
 
         var byPID: [pid_t: UInt64] = [:]
+        var invalidPIDs: Set<pid_t> = []
         var device: DeviceSnapshot?
         var accelerator = IOIteratorNext(iterator)
         while accelerator != 0 {
@@ -95,9 +76,16 @@ public enum GPUSampler {
                       let creator = property(child, "IOUserClientCreator") as? String,
                       let pid = parseCreatorPID(creator)
                 else { continue }
-                byPID[pid, default: 0] &+= accumulatedGPUTime(of: child)
+                guard let value = accumulatedGPUTime(usage: property(child, "AppUsage") as? [[String: Any]]) else {
+                    invalidPIDs.insert(pid)
+                    continue
+                }
+                let sum = byPID[pid, default: 0].addingReportingOverflow(value)
+                if sum.overflow { invalidPIDs.insert(pid) }
+                else { byPID[pid] = sum.partialValue }
             }
         }
+        for pid in invalidPIDs { byPID.removeValue(forKey: pid) }
         return Reading(gpuTimeByPID: byPID, device: device)
     }
 
@@ -107,23 +95,23 @@ public enum GPUSampler {
         guard creator.hasPrefix("pid ") else { return nil }
         let rest = creator.dropFirst(4)
         let digits = rest.prefix(while: { $0.isNumber })
-        guard !digits.isEmpty, let pid = pid_t(digits), pid > 0 else { return nil }
+        guard !digits.isEmpty, rest.dropFirst(digits.count).hasPrefix(", "),
+              let pid = pid_t(digits), pid > 0 else { return nil }
         return pid
     }
 
     // MARK: - Registry plumbing (every read fails to zero/absent)
 
-    /// Sum of `accumulatedGPUTime` over the client's `AppUsage` entries (one
-    /// per command queue). Missing/reshaped property reads 0 = unknown.
-    private static func accumulatedGPUTime(of client: io_registry_entry_t) -> UInt64 {
-        guard let usage = property(client, "AppUsage") as? [[String: Any]] else { return 0 }
+    /// Do not wrap or silently omit a malformed entry: partial sums can look
+    /// like resets or spikes when the complete property reappears next tick.
+    static func accumulatedGPUTime(usage: [[String: Any]]?) -> UInt64? {
+        guard let usage else { return nil }
         var total: UInt64 = 0
         for entry in usage {
-            if let ticks = entry["accumulatedGPUTime"] as? UInt64 {
-                total &+= ticks
-            } else if let ticks = entry["accumulatedGPUTime"] as? Int64, ticks > 0 {
-                total &+= UInt64(ticks)
-            }
+            guard let ticks = entry["accumulatedGPUTime"] as? UInt64 else { return nil }
+            let sum = total.addingReportingOverflow(ticks)
+            guard !sum.overflow else { return nil }
+            total = sum.partialValue
         }
         return total
     }

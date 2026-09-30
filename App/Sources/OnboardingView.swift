@@ -40,7 +40,7 @@ struct OnboardingView: View {
             Divider()
             footer
         }
-        .frame(width: 460, height: 580)
+        .frame(width: 500, height: 660)
         .task { appState.helper.refreshStatus() }
     }
 
@@ -97,7 +97,7 @@ struct OnboardingView: View {
         settingRow(
             icon: "eye", tint: .blue,
             title: "System-wide monitoring",
-            body: "Without it, Anomalous sees only your own apps. With one approval in System Settings — never a password — it also watches system daemons like dasd and WindowServer, where the worst runaways hide. It only reads CPU/memory and can stop a runaway; nothing else.",
+            body: "Monitor system processes as well as your own apps. An optional helper reads their resource use and can stop a process when you request an allowed action. macOS manages approval in System Settings.",
             help: "\(Self.help)/helper"
         ) {
             AnyView(helperControl)
@@ -108,13 +108,13 @@ struct OnboardingView: View {
         settingRow(
             icon: "dot.radiowaves.up.forward", tint: .teal,
             title: "Contribute anonymous signatures",
-            body: "Help the shared knowledge map get smarter. Only the shape of an anomaly is sent — never file paths, arguments, or anything that identifies you or your Mac. Every send is in your log, byte-for-byte.",
+            body: "Optional and off until you choose it. Send process identity, versions, hardware class, and anomaly measurements to help improve the knowledge map. No account, file paths, or command lines are included. You can inspect each payload in your send log.",
             help: "\(Self.help)/privacy"
         ) {
             AnyView(Toggle("", isOn: Binding(
                 get: { appState.contributionEnabled },
                 set: { appState.contributionEnabled = $0 }
-            )).labelsHidden())
+            )).toggleStyle(.switch).labelsHidden())
         }
     }
 
@@ -122,13 +122,13 @@ struct OnboardingView: View {
         settingRow(
             icon: "magnifyingglass", tint: .indigo,
             title: "Look up unknown processes",
-            body: "When Anomalous doesn't recognize a process, it sends just the name (no personal data, no paths) to look up what it is — Sourced by Anomalous — instead of showing a shrug. Every lookup is in your send log.",
+            body: "After you confirm your first lookup, unfamiliar processes can be researched using their identity, versions, installation source, and anomaly type. File paths and command lines are excluded. Every lookup is in your send log.",
             help: "\(Self.help)/discovery"
         ) {
             AnyView(Toggle("", isOn: Binding(
                 get: { appState.discoveryEnabled },
                 set: { appState.discoveryEnabled = $0 }
-            )).labelsHidden())
+            )).toggleStyle(.switch).labelsHidden())
         }
     }
 

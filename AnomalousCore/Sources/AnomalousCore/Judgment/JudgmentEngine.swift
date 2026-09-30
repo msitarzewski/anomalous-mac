@@ -352,6 +352,8 @@ public struct JudgmentEngine: Sendable {
         }
         lines.append(contentsOf: [
             "If a fact is not provided, say so plainly rather than guessing.",
+            "Knowledge-map explanations are general possibilities, not observed causes. Never claim copying, a slow volume, Docker, or another operation caused the anomaly unless observations establish it.",
+            "An observation window is a sampling interval, not proof the latest value persisted continuously. GPU activity values are a relative driver-counter index, not percent of whole-GPU capacity; never infer saturation or heat from them alone.",
             "Write in plain English. NEVER expose internal jargon to the user:",
             "no rule names (e.g. 'cputime_ratio'), no internal field names (e.g. 'whenHotImplies'), no window sizes in minutes, no 'threshold', no 'MADs'.",
             // Brand voice: cards are read by non-technical people, not engineers.

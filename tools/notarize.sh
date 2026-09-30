@@ -7,7 +7,8 @@ set -euo pipefail
 : "${APPLE_PASSWORD:?missing APPLE_PASSWORD}"
 : "${APPLE_TEAM_ID:?missing APPLE_TEAM_ID}"
 
-APP="${1:-$(ls -td "$HOME"/Library/Developer/Xcode/DerivedData/Anomalous-*/Build/Products/Debug/Anomalous.app | head -1)}"
+APP="${1:?Pass the explicit Release/Anomalous.app path}"
+[[ "$APP" == */Release/Anomalous.app ]] || { echo "✗ expected an explicit Release/Anomalous.app artifact"; exit 1; }
 [ -d "$APP" ] || { echo "✗ app not found: $APP"; exit 1; }
 
 ZIP="$(dirname "$APP")/Anomalous-notarize.zip"
@@ -24,4 +25,4 @@ xcrun stapler staple "$APP"
 xcrun stapler validate "$APP"
 rm -f "$ZIP"
 echo "✓ notarized + stapled: $APP"
-spctl -a -vv --type execute "$APP" 2>&1 | head -3 || true
+spctl -a -vv --type execute "$APP"

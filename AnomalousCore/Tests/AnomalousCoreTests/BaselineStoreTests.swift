@@ -156,6 +156,57 @@ struct BaselineStoreTests {
         #expect(stats?.median == 5)
     }
 
+    @Test("read-only judgment freezes EWMA as well as robust baselines")
+    func readOnlyJudgmentDoesNotTeachEWMA() async {
+        let store = BaselineStore(fileURL: tempFile())
+        let date = Date(timeIntervalSince1970: 1_750_000_000)
+        _ = await store.recordTick(key: "worker", at: date, observations: [.cpuPercent: 2, .memoryMB: 100])
+        for i in 1...1000 {
+            _ = await store.recordTick(key: "worker", at: date.addingTimeInterval(Double(i) * 90),
+                                      observations: [.cpuPercent: 900, .memoryMB: 9000], feedBaselines: false)
+        }
+        let ewma = await store.baseline(forKey: "worker")
+        #expect(ewma?.sampleCount == 1)
+        #expect(ewma?.ewmaCPUPercent == 2)
+        #expect(ewma?.ewmaRSSMB == 100)
+        #expect(await store.robustStats(forKey: "worker", metric: .cpuPercent)?.count == 1)
+    }
+
+    @Test("a hot sibling cannot teach the lineage before or after it is flagged")
+    func excludedSiblingLineageDoesNotLearn() async {
+        let store = BaselineStore(fileURL: tempFile())
+        let date = Date(timeIntervalSince1970: 1_750_000_000)
+        for tick in 0..<100 {
+            await store.recordHealthyLineages(["worker": [[.cpuPercent: 2, .memoryMB: 100]]], excluding: [],
+                                               at: date.addingTimeInterval(Double(tick) * 90))
+        }
+        for tick in 100..<1100 {
+            await store.recordHealthyLineages(
+                ["worker": [[.cpuPercent: 2], [.cpuPercent: 900]], "other": [[.cpuPercent: 3]]],
+                excluding: ["worker"], at: date.addingTimeInterval(Double(tick) * 90))
+        }
+        #expect(await store.robustStats(forKey: "worker", metric: .cpuPercent)?.median == 2)
+        #expect(await store.baseline(forKey: "worker")?.sampleCount == 100)
+        #expect(await store.baseline(forKey: "other")?.sampleCount == 1000)
+        // Once the lineage has no candidate, healthy learning resumes.
+        await store.recordHealthyLineages(["worker": [[.cpuPercent: 3]]], excluding: [], at: date)
+        #expect(await store.baseline(forKey: "worker")?.sampleCount == 101)
+    }
+
+    @Test("many sibling instances count as one time observation and ignore iteration order")
+    func siblingCountDoesNotAccelerateWarmup() async {
+        let first = BaselineStore(fileURL: tempFile()), second = BaselineStore(fileURL: tempFile())
+        let values: [[BaselineMetric: Double]] = (1...101).map { [.cpuPercent: Double($0), .memoryMB: 200] }
+        let date = Date(timeIntervalSince1970: 1_750_000_000)
+        await first.recordHealthyLineages(["workers": values], excluding: [], at: date)
+        await second.recordHealthyLineages(["workers": Array(values.reversed())], excluding: [], at: date)
+        let stats = await first.robustStats(forKey: "workers", metric: .cpuPercent)
+        #expect(stats?.count == 1)
+        #expect(stats?.median == 51)
+        #expect(await second.robustStats(forKey: "workers", metric: .cpuPercent)?.median == stats?.median)
+        #expect(await first.baseline(forKey: "workers")?.sampleCount == 1)
+    }
+
     @Test("robust + seasonal state round-trips through save/load")
     func robustPersistence() async {
         let url = tempFile()
@@ -217,5 +268,101 @@ struct BaselineStoreTests {
         let reloaded = BaselineStore(fileURL: url)
         await reloaded.loadIfNeeded()
         #expect(await reloaded.isFlagged(dasd) == false)
+    }
+}
+
+/// Opt-in checks over a protected local snapshot. Private recordings never
+/// become repository fixtures, and diagnostics report aggregate counts only.
+@Suite("private retained-history replay")
+struct PrivateHistoryReplayTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["ANOMALOUS_PRIVATE_REPLAY_DIR"] != nil))
+    func retainedBaselinesAndSignatureEvidence() async throws {
+        let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["ANOMALOUS_PRIVATE_REPLAY_DIR"]!)
+        let files = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("baselines.json") }
+        #expect(!files.isEmpty)
+        let scratch = root.appending(path: "replay-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        var lineageCount = 0, reservoirCount = 0, seasonalCount = 0, selectionCount = 0
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        for (index, file) in files.enumerated() {
+            let original = try Data(contentsOf: file)
+            let snapshot = try JSONDecoder().decode(BaselineStore.Snapshot.self, from: original)
+            let work = scratch.appending(path: "snapshot-\(index).json")
+            try original.write(to: work)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: work.path)
+            let store = BaselineStore(fileURL: work)
+            // Preserve the captured state for inspection, rather than applying
+            // today's TTL to an older snapshot. This is not chronological replay.
+            await store.loadIfNeeded(now: .distantPast)
+            for (key, entry) in snapshot.robust {
+                lineageCount += 1
+                var observations: [BaselineMetric: Double] = [:]
+                for (rawMetric, reservoir) in entry.reservoirs {
+                    guard let metric = BaselineMetric(rawValue: rawMetric) else { continue }
+                    let actual = await store.robustStats(forKey: key, metric: metric)
+                    let preserved = actual == RobustMath.stats(reservoir.values)
+                    #expect(preserved)
+                    reservoirCount += 1
+                    if let last = reservoir.values.last { observations[metric] = last }
+                }
+                for (seasonalKey, summary) in entry.seasonal {
+                    let parts = seasonalKey.split(separator: "|", maxSplits: 1)
+                    guard parts.count == 2, let metric = BaselineMetric(rawValue: String(parts[0])) else { continue }
+                    let actual = await store.seasonalStats(forKey: key, metric: metric, bucket: String(parts[1]))
+                    let preserved = actual == summary.stats
+                    #expect(preserved)
+                    seasonalCount += 1
+                }
+                // lastSeen is a real retained timestamp; individual reservoir
+                // values have none. Selection can be checked, rate/duration cannot.
+                let judgment = await store.recordTick(key: key, at: entry.lastSeen, observations: observations,
+                                                      feedBaselines: false, calendar: calendar)
+                let bucket = SeasonalBucket.key(for: entry.lastSeen, calendar: calendar)
+                for metric in observations.keys {
+                    let seasonal = entry.seasonal["\(metric.rawValue)|\(bucket)"]
+                    let expected = seasonal.flatMap { $0.count >= 5 ? $0.stats : nil }
+                        ?? entry.reservoirs[metric.rawValue]?.stats
+                    let selected = judgment.baselines[metric]
+                    let selectionMatches = selected?.stats == expected
+                    #expect(selectionMatches)
+                    let seasonalMatches = selected?.isSeasonal == (seasonal.map { $0.count >= 5 } ?? false)
+                    #expect(seasonalMatches)
+                    selectionCount += 1
+                }
+            }
+            await store.save()
+            let after = try JSONSerialization.jsonObject(with: Data(contentsOf: work)) as? NSDictionary
+            // Normalize additive schema defaults before comparing retained state.
+            let before = try JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? NSDictionary
+            let frozen = before == after
+            #expect(frozen)
+            let sourceUnchanged = try Data(contentsOf: file) == original
+            #expect(sourceUnchanged)
+        }
+        var signatureCount = 0, gpuCount = 0, gpuAbove100 = 0, contextualScoresUnavailable = 0
+        let logFiles = try FileManager.default.contentsOfDirectory(at: root.appending(path: "signatures"), includingPropertiesForKeys: nil)
+        for file in logFiles where file.pathExtension == "json" {
+            let log = try JSONDecoder().decode(SendLog.Entry.self, from: Data(contentsOf: file))
+            #expect(log.flow == .signature)
+            let payload = try JSONDecoder().decode(AnomalySignaturePayload.self, from: log.payload)
+            signatureCount += 1
+            if payload.anomaly.type == Anomaly.Kind.gpuSaturation.rawValue,
+               let current = payload.anomaly.magnitudeCurve.last {
+                gpuCount += 1
+                if payload.anomaly.magnitudeCurve.contains(where: { $0 > 100 }) { gpuAbove100 += 1 }
+                let wording = JudgmentToolFormatter.gpuObservation(current: current, baseline: payload.anomaly.baselineValue)
+                let noCapacityOrDurationClaim = !wording.contains("%") && !wording.contains("minutes") && !wording.contains("saturat")
+                #expect(noCapacityOrDurationClaim)
+            }
+            // Signatures omit baseline dispersion, co-occurring evidence and
+            // system pressure. Do not invent them to reconstruct confidence.
+            contextualScoresUnavailable += 1
+        }
+        #expect(signatureCount > 0)
+        #expect(gpuCount > 0)
+        print("Private history replay: snapshots=\(files.count), robustLineages=\(lineageCount), reservoirs=\(reservoirCount), seasonalSummaries=\(seasonalCount), selections=\(selectionCount), signatures=\(signatureCount), gpuSignatures=\(gpuCount), gpuIndexAbove100=\(gpuAbove100), confidenceContextUnavailable=\(contextualScoresUnavailable)")
     }
 }

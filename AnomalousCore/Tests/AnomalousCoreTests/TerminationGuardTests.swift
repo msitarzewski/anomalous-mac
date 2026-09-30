@@ -42,6 +42,25 @@ struct TerminationGuardTests {
         }
     }
 
+    @Test("privacy, code-signing and core network daemons are protected")
+    func protectsCoreSystemDaemons() {
+        for name in ["tccd", "amfid", "authd", "sshd", "configd", "mDNSResponder", "fseventsd", "diskarbitrationd"] {
+            #expect(TerminationGuard.decide(pid: 5555, expectedStartAbsTime: start,
+                                            liveStartAbsTime: start, name: name) == .protectedProcess,
+                    "expected \(name) to be protected")
+        }
+    }
+
+    @Test("no protected process is offered a quit action by the shipped knowledge map")
+    func protectedProcessesAreNeverOfferedAQuitAction() throws {
+        let map = try KnowledgeMap.shipped()
+        for name in TerminationGuard.protectedNames {
+            guard let entry = map.entry(forProcessName: name) else { continue }
+            #expect(entry.safetyTier == 3,
+                    "\(name) is protected, but the map offers an action (tier \(entry.safetyTier)); the helper would refuse it")
+        }
+    }
+
     @Test("the wire codes the app switches on are stable (0=ok,1=identity,2=gone,3=eperm,4=other,5=protected)")
     func wireCodesAreStable() {
         #expect(TerminationVerdict.allowed.rawValue == 0)

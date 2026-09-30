@@ -33,8 +33,14 @@ public enum AppAttestError: Error, Equatable {
 public actor AppAttestService: AttestationProviding {
     private let baseURL: URL
     private let defaults: UserDefaults
-    private static let keyIdKey = "appAttestKeyId"
-    private static let registeredKey = "appAttestRegistered"
+    private let keyIdKey: String
+    private let registeredKey: String
+
+    static func registrationKeys(for baseURL: URL) -> (keyID: String, registered: String) {
+        let scope = SHA256.hash(data: Data(baseURL.absoluteString.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        return ("appAttestKeyId.\(scope)", "appAttestRegistered.\(scope)")
+    }
 
     /// Dedupes concurrent first-use so two requests don't both try to register.
     private var registration: Task<String, Error>?
@@ -42,12 +48,17 @@ public actor AppAttestService: AttestationProviding {
     public init(baseURL: URL, defaults: UserDefaults = .standard) {
         self.baseURL = baseURL
         self.defaults = defaults
+        let keys = Self.registrationKeys(for: baseURL)
+        self.keyIdKey = keys.keyID
+        self.registeredKey = keys.registered
     }
 
     public func headers(for body: Data) async -> [String: String] {
         #if canImport(DeviceCheck)
+        var stage = "registration"
         do {
             let keyId = try await ensureRegisteredKey()
+            stage = "assertion"
             let clientDataHash = Data(SHA256.hash(data: body))
             let assertion = try await DCAppAttestService.shared.generateAssertion(keyId, clientDataHash: clientDataHash)
             return [
@@ -55,6 +66,8 @@ public actor AppAttestService: AttestationProviding {
                 "X-Anomalous-Assertion": assertion.base64EncodedString(),
             ]
         } catch {
+            let diagnostic = error as NSError
+            print("[anomalous] App Attest \(stage) failed: \(diagnostic.domain) code \(diagnostic.code); supported=\(DCAppAttestService.shared.isSupported); error=\(String(describing: error as? AppAttestError))")
             // Fail closed: no valid attestation → no headers. Better a rejected
             // request than a placeholder that would poison the corpus if a
             // misconfigured server ever accepted it.
@@ -68,7 +81,8 @@ public actor AppAttestService: AttestationProviding {
     // MARK: - Registration
 
     private func ensureRegisteredKey() async throws -> String {
-        if let keyId = defaults.string(forKey: Self.keyIdKey), defaults.bool(forKey: Self.registeredKey) {
+        // Legacy unscoped registrations have no trustworthy server provenance.
+        if let keyId = defaults.string(forKey: keyIdKey), defaults.bool(forKey: registeredKey) {
             return keyId
         }
         if let registration { return try await registration.value }
@@ -92,14 +106,14 @@ public actor AppAttestService: AttestationProviding {
             let attestation = try await service.attestKey(keyId, clientDataHash: Data(SHA256.hash(data: challenge)))
             try await postRegister(keyId: keyId, attestation: attestation, challenge: challenge)
 
-            defaults.set(keyId, forKey: Self.keyIdKey)
-            defaults.set(true, forKey: Self.registeredKey)
+            defaults.set(keyId, forKey: keyIdKey)
+            defaults.set(true, forKey: registeredKey)
             return keyId
         } catch {
             // The key is now burned (attested, unregistered) or the network
             // failed — drop it so the next attempt generates a clean one.
-            defaults.removeObject(forKey: Self.keyIdKey)
-            defaults.set(false, forKey: Self.registeredKey)
+            defaults.removeObject(forKey: keyIdKey)
+            defaults.set(false, forKey: registeredKey)
             throw error
         }
     }
@@ -110,7 +124,7 @@ public actor AppAttestService: AttestationProviding {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await ServerOverridePolicy.data(for: req)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else { throw AppAttestError.challengeFailed(code) }
 
@@ -134,7 +148,7 @@ public actor AppAttestService: AttestationProviding {
             "challenge": challenge.base64EncodedString(),
         ])
 
-        let (_, response) = try await URLSession.shared.data(for: req)
+        let (_, response) = try await ServerOverridePolicy.data(for: req)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 201 else { throw AppAttestError.registrationFailed(code) }
     }

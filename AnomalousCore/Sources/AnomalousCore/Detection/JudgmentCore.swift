@@ -125,7 +125,8 @@ public enum SeasonalBucket {
 }
 
 /// A graded verdict — never a binary alert (the false-positive moat). The
-/// score is 0–1; the level buckets it for gating: only `.high` surfaces by
+/// score is a normalized heuristic, not a calibrated probability of a problem.
+/// The level buckets it for gating: only `.high` surfaces by
 /// default (AppState), medium/low are retained quietly for a future UI and
 /// for Phase 4's sensitivity envelope.
 public struct Confidence: Sendable, Equatable, Codable {
@@ -145,11 +146,29 @@ public struct Confidence: Sendable, Equatable, Codable {
     }
 }
 
-/// Detector-agreement confidence: no single statistical detector fires an
-/// alert on its own — rules corroborate each other, magnitude speaks, and
-/// machine-wide duress discounts (the process may be the victim, not the
-/// culprit).
+/// Heuristic confidence from distinct measurement families, magnitude, and
+/// machine-wide duress. Different measurements can still be causally related;
+/// their agreement is supporting evidence, not statistical independence.
 public enum ConfidenceEngine {
+    /// Multiple rules over the same resource do not create another observation.
+    private enum EvidenceFamily: Hashable {
+        case cpu, memory, wakeups, disk, gpu, network, responsiveness
+    }
+
+    private static func evidenceFamily(for kind: Anomaly.Kind) -> EvidenceFamily? {
+        switch kind {
+        case .sustainedCPU, .cpuTimeRatio: return .cpu
+        case .rssLeak, .rssCeiling, .memoryLeakFootprint: return .memory
+        case .energyWakeups: return .wakeups
+        case .diskThrash: return .disk
+        case .gpuSaturation: return .gpu
+        case .networkThroughput: return .network
+        case .appHung: return .responsiveness
+        // An unfamiliar identity is not evidence of another resource problem.
+        case .novelProcess: return nil
+        }
+    }
+
     /// Rules whose own thresholds are already conservative enough to stand
     /// alone: the Phase-1 heritage rules (a 50% lifetime ratio, 80% for 25
     /// minutes, a 16 GB ceiling, a hung event loop) plus the footprint port
@@ -173,10 +192,11 @@ public enum ConfidenceEngine {
 
     /// The formula (documented so dogfood tuning has a map):
     ///
-    ///     base       0.8 self-qualifying rule / 0.5 statistical Δ-rule
-    ///     agreement  +0.3 per OTHER rule independently firing for the same
-    ///                process this tick, capped at +0.4 (2-of-N: two Δ-rules
-    ///                agreeing → 0.8 → high)
+    ///     base       0.8 self-qualifying rule / 0.5 statistical or
+    ///                explicitly corroboration-required candidate
+    ///     agreement  +0.3 per OTHER distinct measurement family for the same
+    ///                process this tick, capped at +0.4. Two rules measuring
+    ///                CPU count as one family; identity novelty counts as none.
     ///     magnitude  +0.35 × min((MADs − 8) / 16, 1) — how far above the
     ///                robust baseline, so one spectacular signal reaches
     ///                high without a second rule
@@ -184,13 +204,15 @@ public enum ConfidenceEngine {
     ///                pressure (level ≥ 2): under pressure the process may
     ///                be the victim, not the culprit
     ///
-    /// Clamped to 0…1; levels at ≥ 0.8 / ≥ 0.5 (see Confidence.init).
+    /// Clamped to 0…1; levels at ≥ 0.8 / ≥ 0.5 (see Confidence.init). Neither
+    /// a robust deviation nor this score is a probability. `agreeingRules` is
+    /// the legacy argument label; callers pass deduplicated OTHER families.
     public static func score(
         for anomaly: Anomaly,
         agreeingRules: Int,
         signals: SystemSignals?
     ) -> Confidence {
-        var value = selfQualifyingKinds.contains(anomaly.kind) ? 0.8 : 0.5
+        var value = selfQualifyingKinds.contains(anomaly.kind) && !anomaly.requiresCorroboration ? 0.8 : 0.5
         value += min(Double(max(agreeingRules, 0)) * 0.3, 0.4)
         if let deviation = anomaly.baselineDeviation, deviation > magnitudeOnset {
             value += 0.35 * min((deviation - magnitudeOnset) / magnitudeSpan, 1)
@@ -201,12 +223,16 @@ public enum ConfidenceEngine {
         return Confidence(score: value)
     }
 
-    /// Score every candidate for ONE process against the others (agreement =
-    /// how many peers fired this tick) and stamp the machine-context note.
+    /// Score candidates for ONE process. Repeated rules and alternate views of
+    /// the same physical resource cannot add corroboration.
     public static func annotate(_ candidates: [Anomaly], signals: SystemSignals?) -> [Anomaly] {
-        candidates.map { anomaly in
+        let families = Set(candidates.compactMap { evidenceFamily(for: $0.kind) })
+        return candidates.map { anomaly in
             var annotated = anomaly
-            annotated.confidence = score(for: anomaly, agreeingRules: candidates.count - 1, signals: signals)
+            let corroboratingFamilies = evidenceFamily(for: anomaly.kind).map {
+                families.subtracting([$0]).count
+            } ?? 0
+            annotated.confidence = score(for: anomaly, agreeingRules: corroboratingFamilies, signals: signals)
             annotated.systemContext = systemContext(for: anomaly, signals: signals)
             return annotated
         }

@@ -32,6 +32,18 @@ public enum JudgmentToolFormatter {
         return "\(number(deviation)) MADs \(deviation < 0 ? "below" : "above") its baseline"
     }
 
+    /// Driver counters are summed across clients/queues; no capacity denominator
+    /// or continuous-duration evidence is available from this metric.
+    public static func gpuObservation(current: Double, baseline: Double?) -> String {
+        guard let baseline else { return "GPU activity was flagged; no usual level is available for comparison." }
+        return current > baseline
+            ? "The latest recorded GPU activity is above its usual level."
+            : "The latest recorded GPU activity is no longer above its usual level."
+    }
+
+    public static let gpuExplanation = "These readings don't establish how much of the whole GPU is busy or what caused the activity."
+    public static let gpuGuidance = "If the app is responsive and doing what you expect, you can leave it running. Check again if it stays unusually busy after your work finishes."
+
     /// The metric's plain-English unit for a sentence.
     static func unit(for metric: BaselineMetric) -> String {
         switch metric {
@@ -39,7 +51,7 @@ public enum JudgmentToolFormatter {
         case .memoryMB: return "MB of memory"
         case .wakeupsPerSecond: return "interrupt wakeups per second"
         case .diskBytesPerSecond: return "MB/s of disk I/O"
-        case .gpuPercent: return "% of the GPU"
+        case .gpuPercent: return "GPU activity index (not percent of total GPU capacity)"
         case .networkBytesPerSecond: return "MB/s of network traffic"
         }
     }
@@ -117,7 +129,7 @@ public enum JudgmentToolFormatter {
         // string here contradicted the observed truth.
         var lines = [
             "\(entry.processName) (\(entry.displayName)): \(entry.whatItIs)",
-            "When hot: \(entry.whenHotImplies)",
+            "General possibilities, not an observed cause: \(entry.whenHotImplies)",
         ]
         if let action = entry.safeAction {
             lines.append("Safe action: \(action) (safety tier \(entry.safetyTier)).")

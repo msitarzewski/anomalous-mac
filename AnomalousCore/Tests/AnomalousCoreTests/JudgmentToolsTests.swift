@@ -19,6 +19,23 @@ struct JudgmentToolFormatterTests {
         )
     }
 
+    @Test("GPU activity above 100 never becomes a capacity or duration claim")
+    func gpuActivitySemantics() {
+        let text = JudgmentToolFormatter.gpuObservation(current: 298, baseline: 0)
+        #expect(text == "The latest recorded GPU activity is above its usual level.")
+        #expect(!text.contains("%"))
+        #expect(!text.contains("minutes"))
+        #expect(JudgmentToolFormatter.unit(for: .gpuPercent).contains("not percent"))
+        #expect(JudgmentToolFormatter.gpuExplanation.contains("don't establish"))
+    }
+
+    @Test("GPU observation distinguishes recovery and missing baseline")
+    func gpuRecoveryAndUnknownBaseline() {
+        #expect(JudgmentToolFormatter.gpuObservation(current: 1, baseline: 2).contains("no longer"))
+        #expect(JudgmentToolFormatter.gpuObservation(current: 2, baseline: 2).contains("no longer"))
+        #expect(JudgmentToolFormatter.gpuObservation(current: 298, baseline: nil).contains("no usual level"))
+    }
+
     @Test("numbers are quoted exactly — integers stay bare, no grouping separators")
     func numberFormatting() {
         #expect(JudgmentToolFormatter.number(1400.0) == "1400")

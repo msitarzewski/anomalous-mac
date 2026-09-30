@@ -70,10 +70,6 @@ struct AnomalyListView: View {
             appState.startMonitoring()
             appState.helper.refreshStatus()
         }
-        // Popover visibility drives discovery polling: a lookup in flight is
-        // dropped when the popover closes (the result still lands server-side).
-        .onAppear { appState.popoverIsOpen = true }
-        .onDisappear { appState.popoverIsOpen = false }
     }
 
     /// The "super part": system-wide monitoring. Shown right in the popover
@@ -176,9 +172,6 @@ struct AnomalyListView: View {
                     .disabled(!updater.canCheckForUpdates)
                     Divider()
                     Button("Settings…") {
-                        // AppDelegate opens the SwiftUI Settings scene from AppKit
-                        // (showSettingsWindow:) and forces it frontmost — an
-                        // accessory app's Settings window otherwise opens behind.
                         AppDelegate.shared?.openSettingsWindow()
                         AppDelegate.shared?.closePopover()
                     }
@@ -690,7 +683,7 @@ struct DiagnosisCardView: View {
     /// The processed, plain-English "what this means" — for a potentially
     /// non-technical reader. Always visible, right under the raw numbers.
     private var plainSummary: some View {
-        Text(judged.card.whyItsProbablyHot.sentenceCased)
+        Text((judged.anomaly.kind == .gpuSaturation ? JudgmentToolFormatter.gpuExplanation : judged.card.whyItsProbablyHot).sentenceCased)
             .font(.body)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -830,7 +823,7 @@ struct DiagnosisCardView: View {
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(judged.card.suggestedAction)
+            Text(judged.suggestedActionText)
                 .font(.body)
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -857,7 +850,7 @@ struct DiagnosisCardView: View {
             // far from usual this is (the precise figures are in the readout
             // below). Rendered here so the generated field isn't wasted and the
             // headline verdict has its supporting "normal for it" line.
-            if !judged.card.isThisNormal.isEmpty {
+            if judged.anomaly.kind != .gpuSaturation, !judged.card.isThisNormal.isEmpty {
                 Text(judged.card.isThisNormal.sentenceCased)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -926,7 +919,11 @@ struct DiagnosisCardView: View {
         case .rssLeak, .rssCeiling, .memoryLeakFootprint:
             if let r = metricRow("Memory", " MB") { rows.append(r) }
         case .gpuSaturation:
-            if let r = metricRow("GPU", "%") { rows.append(r) }
+            if let current = a.magnitudeCurve.last {
+                var value = JudgmentToolFormatter.number(current)
+                if let baseline = a.baselineValue { value += " · baseline \(JudgmentToolFormatter.number(baseline))" }
+                rows.append(DetailRow(label: "GPU activity", value: value + " (relative index, not % of total capacity)"))
+            }
         case .energyWakeups:
             if let r = metricRow("Wakeups", "/sec") { rows.append(r) }
         case .diskThrash:
@@ -936,7 +933,7 @@ struct DiagnosisCardView: View {
         case .novelProcess, .appHung:
             break   // no measured resource figure to quote honestly
         }
-        rows.append(DetailRow(label: "Baseline window", value: Self.humanWindow(a.windowSeconds)))
+        rows.append(DetailRow(label: "Observation window", value: Self.humanWindow(a.windowSeconds)))
         rows.append(DetailRow(label: "Signal", value: a.kind.plainLabel))
         rows.append(DetailRow(label: "Source", value: detailSource))
         return rows
@@ -1180,7 +1177,7 @@ struct GetHelpControl: View {
                 .buttonStyle(.glassProminent)
                 .tint(.green)
                 .shadow(color: .green.opacity(0.55), radius: 6)
-                .help("Get Help — send this diagnosis to Anomalous for an expert answer. Frontier AI researches the process and replies with cited sources you can verify. Costs a few cents from your prepaid balance; you're only charged if it finds a real answer.")
+                .help("Get Help — send this diagnosis to Anomalous for an expert answer. Frontier AI researches the process and replies with cited sources you can verify. A new diagnosis uses 50¢ of prepaid credit; a repeat answer from your account costs 10¢. If no answer is produced, the charge is refunded.")
             case .sending:
                 HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Sending…").font(.callout).foregroundStyle(.secondary) }
             case .sent(let id):
@@ -1205,6 +1202,11 @@ struct GetHelpControl: View {
                 .buttonStyle(.glassProminent)
                 .tint(.orange)
                 .help("Opens Account, where you can top up your prepaid balance. Then tap Get Help again.")
+            case .requestRemoved:
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("The previous diagnosis request is no longer available.").font(.caption)
+                    Button("New diagnosis (50¢)") { Task { await appState.startNewEscalation(judged) } }
+                }
             case .failed(let message):
                 InlineRetryError(message: message) { Task { await appState.retryEscalation(judged) } }
             }

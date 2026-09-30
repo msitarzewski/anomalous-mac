@@ -10,7 +10,7 @@
 #   source ~/.config/anomalous/signing.env
 #   ./tools/make-dmg.sh [path/to/Anomalous.app] [outdir]
 #
-# Defaults: latest Release build → ./dist/Anomalous-<version>.dmg
+# Requires an explicit Release app; output defaults to ./dist.
 set -euo pipefail
 
 : "${APPLE_ID:?source ~/.config/anomalous/signing.env first}"
@@ -21,12 +21,14 @@ TEAM_ID="${APPLE_TEAM_ID}"
 DEV_ID="Developer ID Application: Michael Sitarzewski (${TEAM_ID})"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
-APP="${1:-$(ls -td "$HOME"/Library/Developer/Xcode/DerivedData/Anomalous-*/Build/Products/Release/Anomalous.app | head -1)}"
+APP="${1:?Pass the explicit Release/Anomalous.app path}"
+[[ "$APP" == */Release/Anomalous.app ]] || { echo "✗ expected an explicit Release/Anomalous.app artifact"; exit 1; }
 [ -d "$APP" ] || { echo "✗ app not found: $APP"; exit 1; }
 OUTDIR="${2:-$HERE/dist}"
 mkdir -p "$OUTDIR"
 
-VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null || echo 0.1.0)"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "✗ missing or invalid release version"; exit 1; }
 VOL="Anomalous"
 DMG="$OUTDIR/Anomalous-$VERSION.dmg"
 
@@ -38,29 +40,42 @@ APP_X=115;  APP_Y=120         # Anomalous.app icon position
 APPS_X=315; APPS_Y=120        # /Applications drop-target position
 
 echo "▸ verifying the app is signed + notarized (its ticket rides inside the DMG)"
-codesign --verify --strict "$APP"
+codesign --verify --deep --strict "$APP"
+xcrun stapler validate "$APP"
 spctl -a -vv --type exec "$APP" 2>&1 | grep -q "accepted" \
   || { echo "✗ app is not Gatekeeper-accepted — run sign.sh + notarize.sh first"; exit 1; }
 
-STAGING="$(mktemp -d)"
+WORK="$(mktemp -d)"
+MOUNT="$WORK/mount"
+STAGING="$WORK/staging"
+TMPDMG="$WORK/staging.dmg"
+MOUNTED=false
+cleanup() {
+  if [ "$MOUNTED" = true ]; then
+    hdiutil detach "$MOUNT" >/dev/null || return 1
+  fi
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
+mkdir -p "$STAGING" "$MOUNT"
 cp -R "$APP" "$STAGING/Anomalous.app"
 ln -s /Applications "$STAGING/Applications"
 
 echo "▸ building read-write DMG to style the window"
-TMPDMG="$(mktemp -u).dmg"
 SIZE_MB=$(( $(du -sm "$STAGING" | awk '{print $1}') + 20 ))
 hdiutil create -volname "$VOL" -srcfolder "$STAGING" -fs HFS+ -format UDRW -size "${SIZE_MB}m" -ov "$TMPDMG" >/dev/null
 rm -rf "$STAGING"
 
-DEV="$(hdiutil attach -readwrite -noverify -noautoopen "$TMPDMG" | grep '/Volumes/' | awk '{print $1}')"
+hdiutil attach -readwrite -noautoopen -mountpoint "$MOUNT" "$TMPDMG" >/dev/null
+MOUNTED=true
 sleep 1
 # Strip hidden cruft so it isn't visible to users who browse with hidden files
 # shown (and so the window holds exactly two items: the app + Applications).
-rm -rf "/Volumes/$VOL/.fseventsd" "/Volumes/$VOL/.Trashes" 2>/dev/null || true
+rm -rf "$MOUNT/.fseventsd" "$MOUNT/.Trashes" 2>/dev/null || true
 echo "▸ applying Finder layout (${ICON_SIZE}px icons, ${WIN_W}×${WIN_H} window)"
 osascript <<EOF
 tell application "Finder"
-  tell disk "$VOL"
+  tell (POSIX file "$MOUNT" as alias)
     open
     set current view of container window to icon view
     set toolbar visible of container window to false
@@ -78,7 +93,7 @@ tell application "Finder"
     close
   end tell
   delay 1
-  tell disk "$VOL"
+  tell (POSIX file "$MOUNT" as alias)
     open
     delay 1
     close
@@ -86,7 +101,8 @@ tell application "Finder"
 end tell
 EOF
 sync; sleep 1
-hdiutil detach "$DEV" >/dev/null 2>&1 || diskutil eject "$DEV" >/dev/null 2>&1 || true
+hdiutil detach "$MOUNT" >/dev/null
+MOUNTED=false
 
 echo "▸ compressing → $DMG"
 rm -f "$DMG"
@@ -105,4 +121,4 @@ xcrun stapler staple "$DMG"
 xcrun stapler validate "$DMG"
 
 echo "✓ DMG ready: $DMG"
-spctl -a -vv --type open --context context:primary-signature "$DMG" 2>&1 | head -3 || true
+spctl -a -vv --type open --context context:primary-signature "$DMG"

@@ -104,11 +104,21 @@ struct RusageV6Tests {
         // same order of magnitude instead.
         #expect(usage.lifetimeMaxPhysFootprintBytes > 0)
         #expect(usage.lifetimeMaxPhysFootprintBytes > usage.physFootprintBytes / 2)
-        #expect(usage.instructions > 0)
-        #expect(usage.cycles > 0)
+        // A virtual machine (such as a hosted CI runner) has no CPU performance
+        // counters, so retired instructions and cycles read 0 there.
+        if !Self.isVirtualMachine {
+            #expect(usage.instructions > 0)
+            #expect(usage.cycles > 0)
+        }
         // phys_footprint is the honest number: it should differ from (and on
         // a live process not dwarf) RSS — sanity-bound it, don't equate it.
         #expect(usage.physFootprintBytes < 64 * 1024 * 1024 * 1024)
+    }
+
+    private static var isVirtualMachine: Bool {
+        var present: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        return sysctlbyname("kern.hv_vmm_present", &present, &size, nil, 0) == 0 && present == 1
     }
 }
 

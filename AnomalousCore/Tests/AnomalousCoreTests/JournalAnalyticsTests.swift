@@ -82,7 +82,7 @@ struct JournalAnalyticsTests {
             [je("r", kind: .gpuSaturation, agoHours: 1)]
         let d = digest(entries)
         #expect(d.byKind.count == 3)                        // raw keeps them separate
-        #expect(d.byType.map(\.label) == ["High CPU", "GPU running hot"])
+        #expect(d.byType.map(\.label) == ["High CPU", "Unusual GPU activity"])
         #expect(d.byType.first?.count == 5)                 // 3 + 2 folded
         #expect(d.mostCommonType?.label == "High CPU")
         // the representative kind colours to one of the CPU kinds

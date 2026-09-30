@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import AnomalousCore
 
@@ -34,5 +35,34 @@ struct ServerOverridePolicyTests {
         #expect(ServerOverridePolicy.isAllowedOverride("http://192.168.1.50:8091", isDebug: true))
         #expect(ServerOverridePolicy.isAllowedOverride("http://example.com", isDebug: true))
         #expect(!ServerOverridePolicy.isAllowedOverride("not-a-url", isDebug: true))
+    }
+}
+
+@Suite("release configuration and transport")
+struct ReleaseTransportTests {
+    @Test func environmentCannotOverrideRelease() {
+        for value in ["http://evil.example", "https://evil.example", "http://localhost:8787"] {
+            #expect(ServerOverridePolicy.resolve(environment: value, developerOverride: nil, isDebug: false) == "https://api.anomalous.bot")
+        }
+        #expect(ServerOverridePolicy.resolve(environment: "https://evil.example", developerOverride: "http://localhost:8787", isDebug: false) == "http://localhost:8787")
+        #expect(ServerOverridePolicy.resolve(environment: "http://localhost:8787", developerOverride: nil, isDebug: true) == "http://localhost:8787")
+    }
+
+    @Test func rejectsNonWebAndCredentialURLs() {
+        for value in ["ftp://localhost/file", "file://localhost/file", "https://user:pass@example.com", "https://example.com?token=x"] {
+            #expect(!ServerOverridePolicy.isAllowedOverride(value, isDebug: true))
+        }
+        #expect(ServerOverridePolicy.isAllowedOverride("http://[::1]:8787", isDebug: false))
+    }
+
+    @Test func transportRejectsBeforeNetwork() async throws {
+        for value in ["http://example.com", "ftp://localhost/file", "https://user:pass@example.com"] {
+            do {
+                _ = try await ServerOverridePolicy.data(for: URLRequest(url: URL(string: value)!))
+                Issue.record("unsafe transport accepted")
+            } catch ServerOverridePolicy.TransportError.insecureURL { }
+        }
+        try ServerOverridePolicy.assertSecureTransport(URL(string: "http://[::1]:8787")!)
+        try ServerOverridePolicy.assertSecureTransport(URL(string: "https://api.anomalous.bot")!)
     }
 }

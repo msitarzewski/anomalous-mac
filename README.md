@@ -19,9 +19,8 @@ Every other Mac monitor is a **gauge**: iStat Menus, Stats, Activity Monitor —
 they render CPU, memory, GPU, and network beautifully and stop. None of them
 answer the three questions you actually have: **is this normal? · what is it? ·
 what do I do?** Anomalous is the **judge**. A quiet menu-bar app that watches
-your Mac across every measurable dimension, stays silent when nothing is wrong,
-and — only when something genuinely is — surfaces a plain-language diagnosis
-card with a safe action to take.
+resource use on your Mac, looks for sustained unusual activity, and surfaces
+a plain-language diagnosis card with conservative next steps.
 
 This repository is the **macOS sensor** — the on-device client. It's open source
 on purpose (see *Why this is open*). The recon/triage backend and the aggregate
@@ -36,7 +35,7 @@ useful entirely on its own, offline, with no account.
   cumulative **CPU**, **physical-footprint memory** (the honest number Activity
   Monitor shows, not RSS) & compressed memory, **disk I/O**, **energy** (in
   nanojoules, split P-core vs E-core), **wakeups** (the real battery-drain
-  signal), **per-process GPU** utilization & memory, **per-process network**
+  signal), **per-process GPU** activity & memory, **per-process network**
   throughput, and **Neural-Engine** memory — plus system context (memory
   pressure, swap, thermal state, load). Most of it is read from calls the OS was
   already making. Including the per-process baseline math and detection, the
@@ -53,11 +52,10 @@ useful entirely on its own, offline, with no account.
 - **Explains** on-device with Apple's **Foundation Models**, grounded by a
   reviewed knowledge corpus of macOS processes. The detector decides *what's
   wrong* and hands the model the exact numbers; the model only puts it in plain
-  words — it **quotes** the facts, never invents them. Typed card: *what it is ·
+  words, with instructions to quote the observed facts and label uncertainty. Typed card: *what it is ·
   why it's probably hot · is this normal · what to do*.
-- **Escalates** in three tiers, cheapest first (see *On-device intelligence*):
-  on-device → Apple **Private Cloud Compute** → the paid Anomalous backend. You
-  only ever *pay* on an explicit tap.
+- **Explains locally**, with optional paid Get Help on an explicit tap.
+  Private Cloud Compute integration is present but inactive.
 - **Acts**, conservatively, with safety tiers: Quit / Force Quit user processes,
   `brew services` stop/restart, root-daemon termination via the helper, or an
   explain-only card for things you must not kill.
@@ -118,8 +116,8 @@ only phrases the verdict over facts it's handed.
 | Tier | Runs on | For | Cost & privacy |
 |---|---|---|---|
 | **1 · On-device** | Apple **Foundation Models** on your Mac | Every card. Tool-calling over live process facts, grounded by the corpus. | Free · offline · nothing leaves the machine |
-| **2 · Private Cloud Compute** | Apple's **PCC** | Hard / novel anomalies the on-device model can't ground confidently. Routed automatically. | Free · key-less, no account · Apple's verifiable no-storage privacy |
-| **3 · Get Help** | The Anomalous backend | Only on an **explicit tap**. Frontier-AI triage with cited web evidence, and a shared diagnosis cache that gets cheaper & better for everyone over time. | Prepaid · every payload allowlisted and **logged locally byte-for-byte** |
+| **2 · Private Cloud Compute** | Apple's **PCC** | Inactive in the direct-download release. | No PCC requests sent |
+| **3 · Get Help** | The Anomalous backend | Only on an **explicit tap**. Frontier-AI triage with cited web evidence, with account-scoped caching. Cross-account reuse is disabled. | Prepaid · every payload allowlisted and **logged locally byte-for-byte** |
 
 **Grounding.** Cards are grounded by a reviewed, community-correctable
 **process-identity corpus** — shipped with the app, and refreshed from a signed
@@ -164,12 +162,11 @@ Privileged helper (root) ─ fills root-owned gaps (XPC, Team-ID-pinned) ──�
 
 - **macOS 26 (Tahoe) or later, Apple Silicon.** macOS 27 (Golden Gate)
   recommended — the richer on-device models and per-process signals are best there.
-- Xcode 26+ (27 for the macOS-27 features) and
+- Xcode 27 beta for the current source and
   [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
 - **Apple Intelligence** for the on-device judgment layer; degrades to
   knowledge-corpus-only cards where unavailable.
-- Private Cloud Compute (tier 2) needs the app to carry Apple's PCC entitlement;
-  without it, escalation simply stays on-device or waits for an explicit tap.
+- Private Cloud Compute (tier 2) is inactive in the direct-download release.
 
 ## Why Apple Silicon only
 
@@ -204,13 +201,14 @@ Anomalous is free and open source. If it saves you a debugging session, consider
 funds the curation (the process-identity corpus, the reviewed known-issues feed)
 that makes the free tier better for everyone.
 
-More native macOS tools from the same workshop — small, fast, open, no telemetry:
+More native macOS tools from the same workshop — small, fast, and open:
 **[Brew Browser](https://brew-browser.zerologic.com)** (a GUI for Homebrew) ·
 **[Agency Agents](https://agencyagents.app)** (a control surface for AI agent personas).
 
 ## Network disclosure
 
-Anomalous is quiet on the network — no third parties, no analytics, no telemetry.
+Local detection needs no account. Optional contribution requires consent; discovery
+and paid help send limited diagnostic data. Paid help is account-linked.
 Every host it contacts, and when, is listed in **[NETWORK.md](NETWORK.md)**.
 
 ## Security

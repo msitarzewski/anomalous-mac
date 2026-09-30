@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let popover = NSPopover()
     private var homeWindowController: NSWindowController?
     private var welcomeWindowController: NSWindowController?
+    private var settingsWindowController: NSWindowController?
 
     // Cached menu-bar marks (same asset-catalog images the SwiftUI label used).
     private lazy var quietImage: NSImage? = {
@@ -95,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.image = quiet ? quietImage : activeImage
         button.image?.accessibilityDescription = quiet
             ? "Anomalous: nothing is wrong"
-            : "Anomalous: \(appState.anomalies.count) anomaly\(appState.anomalies.count == 1 ? "" : "ies") detected"
+            : "Anomalous: \(appState.anomalies.count) \(appState.anomalies.count == 1 ? "anomaly" : "anomalies") detected"
     }
 
     @objc private func togglePopover(_ sender: Any?) {
@@ -153,20 +154,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// Open the SwiftUI `Settings` scene from AppKit (the popover's `openSettings`
-    /// is inert). Then force it frontmost — an accessory app's Settings window
-    /// otherwise opens behind everything.
+    /// Share one settings window across the popover, account links, and ⌘,.
     func openSettingsWindow() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        closePopover()
+        if settingsWindowController == nil {
+            let host = NSHostingController(rootView: SettingsView(appState: appState))
+            host.sizingOptions = [.preferredContentSize]
+            let window = NSWindow(contentViewController: host)
+            window.title = "Anomalous Settings"
+            window.identifier = NSUserInterfaceItemIdentifier("settings")
+            window.styleMask = [.titled, .closable]
+            window.isReleasedWhenClosed = false
+            window.center()
+            settingsWindowController = NSWindowController(window: window)
+        }
+        settingsWindowController?.showWindow(nil)
+        settingsWindowController?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        DispatchQueue.main.async {
-            NSApp.windows
-                .first { $0.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" }?
-                .makeKeyAndOrderFront(nil)
+    }
+
+    @objc nonisolated private func defaultsChanged() {
+        Task { @MainActor [weak self] in
+            self?.closeCompletedOnboarding()
         }
     }
 
-    @objc private func defaultsChanged() {
+    private func closeCompletedOnboarding() {
         if UserDefaults.standard.bool(forKey: "hasCompletedOnboarding"),
            welcomeWindowController?.window?.isVisible == true {
             welcomeWindowController?.close()

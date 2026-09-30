@@ -319,14 +319,8 @@ public actor BaselineStore {
     /// recording, so a tick's own reading never contaminates the baseline it
     /// is judged against.
     ///
-    /// `feedBaselines: false` records NOTHING robust/seasonal (selection
-    /// still returned): the caller passes it for currently-flagged
-    /// processes, because a runaway that burns for two days must not teach
-    /// the baseline that burning is normal — only Phase 4's explicit
-    /// "normal for me" acknowledgment may do that. (The legacy EWMA keeps
-    /// feeding regardless, exactly as it did pre-Phase-2: it's the "what's
-    /// normal" sentence, deliberately slow, and changing its diet here would
-    /// silently rewrite shipped card copy.)
+    /// `feedBaselines: false` is read-only, including the legacy EWMA. The app
+    /// selects for every sibling before committing clean lineage observations.
     public func recordTick(
         key: String,
         at date: Date,
@@ -335,7 +329,7 @@ public actor BaselineStore {
         seasonalMinimum: Int = 5,
         calendar: Calendar = .current
     ) -> TickJudgment {
-        if let cpu = observations[.cpuPercent] {
+        if feedBaselines, let cpu = observations[.cpuPercent] {
             record(key: key, cpuPercent: cpu, rssMB: observations[.memoryMB] ?? 0)
         }
 
@@ -360,11 +354,32 @@ public actor BaselineStore {
             summary.add(value)
             entry.seasonal[seasonalKey] = summary
         }
-        snapshot.robust[key] = entry
+        if feedBaselines { snapshot.robust[key] = entry }
         return TickJudgment(
             baselines: selected,
             observationCount: snapshot.baselines[key]?.sampleCount ?? 0
         )
+    }
+
+    /// Commit only after every process in the tick has been judged. Any anomalous
+    /// sibling excludes the whole lineage for that tick. One median per metric
+    /// prevents process count/order from masquerading as independent time samples.
+    public func recordHealthyLineages(
+        _ observations: [String: [[BaselineMetric: Double]]],
+        excluding excluded: Set<String>,
+        at date: Date,
+        calendar: Calendar = .current
+    ) {
+        for key in observations.keys.sorted() where !excluded.contains(key) {
+            var representative: [BaselineMetric: Double] = [:]
+            for metric in BaselineMetric.allCases {
+                let values = observations[key, default: []].compactMap { $0[metric] }.filter { $0.isFinite && $0 >= 0 }
+                if let median = RobustMath.median(values) { representative[metric] = median }
+            }
+            if !representative.isEmpty {
+                _ = recordTick(key: key, at: date, observations: representative, calendar: calendar)
+            }
+        }
     }
 
     /// The lineage's global robust stats for one metric (nil = never fed).

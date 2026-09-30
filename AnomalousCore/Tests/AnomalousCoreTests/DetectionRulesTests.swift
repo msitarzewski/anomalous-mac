@@ -511,15 +511,16 @@ struct KnowledgeMapTests {
 
 @Suite("chronic CPU — the baseline-poisoning catch")
 struct ChronicCPUTests {
-    @Test("flags a process whose robust median CPU is itself pathological (poisoned baseline, e.g. appstoreagent ~62%)")
+    @Test("creates a corroboration-required candidate when historical and recent high CPU agree")
     func flagsChronicRunaway() {
         let robust = RobustStats(median: 62, mad: 5, count: 40)
+        let history = samples(cpuPercent: 62, minutes: 30)
         let anomaly = DetectionRules.chronicCPUAnomaly(
-            robust: robust,
-            sample: sample(cpuTime: 0, uptime: 3600, name: "appstoreagent")
+            robust: robust, sample: history.last!, history: history
         )
         #expect(anomaly?.kind == .sustainedCPU)
-        #expect(anomaly?.identity.executableName == "appstoreagent")
+        #expect(anomaly?.identity.executableName == "dasd")
+        #expect(anomaly?.requiresCorroboration == true)
     }
 
     @Test("does not flag a process whose typical CPU is below the chronic floor")
@@ -531,5 +532,143 @@ struct ChronicCPUTests {
     @Test("never fires on a cold process with no robust stats yet")
     func ignoresColdProcess() {
         #expect(DetectionRules.chronicCPUAnomaly(robust: nil, sample: sample(cpuTime: 0, uptime: 3600)) == nil)
+    }
+}
+
+@Suite("wakeups verification uses actual energy cost")
+struct WakeupVerificationTests {
+    @Test func labelDescribesTheObservation() {
+        #expect(Anomaly.Kind.energyWakeups.plainLabel == "Unusual wakeup activity")
+    }
+
+    @Test func harmlessWakeupsClear() {
+        let samples = counterSamples(minutes: 15, wakeupsPerSecond: 1400, cpuPercent: 40, energyWattsSustained: 0.2)
+        #expect(DetectionRules.liveConditionActive(kind: .energyWakeups, history: samples) == false)
+    }
+    @Test func consequentialWakeupsRemain() {
+        let samples = counterSamples(minutes: 15, wakeupsPerSecond: 1400, cpuPercent: 0, energyWattsSustained: 1)
+        #expect(DetectionRules.liveConditionActive(kind: .energyWakeups, history: samples) == true)
+    }
+    @Test func absentEnergyUsesCPUAndAbsentHistoryStaysUnknown() {
+        #expect(DetectionRules.liveConditionActive(kind: .energyWakeups, history: counterSamples(minutes: 15, wakeupsPerSecond: 1400, cpuPercent: 0)) == false)
+        #expect(DetectionRules.liveConditionActive(kind: .energyWakeups, history: counterSamples(minutes: 15, wakeupsPerSecond: 1400, cpuPercent: 40)) == true)
+        #expect(DetectionRules.liveConditionActive(kind: .energyWakeups, history: []) == nil)
+    }
+}
+
+@Suite("recent resource windows — time weighting and continuity")
+struct RecentResourceWindowTests {
+    private let baseline = SelectedBaseline(stats: RobustStats(median: 1, mad: 1, count: 40), isSeasonal: false)
+
+    private func timeline(_ intervals: [(Double, Double)], memory: [UInt64]? = nil) -> [ProcessSample] {
+        var elapsed = 0.0
+        var work = 1.0
+        func point(_ index: Int) -> ProcessSample {
+            ProcessSample(identity: identity(), timestamp: Date(timeIntervalSince1970: 1_750_000_000 + elapsed),
+                cpuTimeSeconds: work, residentBytes: memory?[index] ?? 1_073_741_824,
+                uptimeSeconds: elapsed, physFootprintBytes: memory?[index] ?? 1_073_741_824,
+                diskBytesRead: UInt64(work * 100_000_000), energyNanojoules: UInt64(work * 1_000_000_000),
+                interruptWakeups: UInt64(work * 1000), netBytesIn: UInt64(work * 100_000_000))
+        }
+        var result = [point(0)]
+        for (index, interval) in intervals.enumerated() {
+            elapsed += interval.0
+            work += interval.0 * interval.1
+            result.append(point(index + 1))
+        }
+        return result
+    }
+
+    @Test("old busy history cannot keep recovered resource windows firing")
+    func historicalHeatExpires() {
+        let history = timeline(Array(repeating: (60, 1), count: 60) + Array(repeating: (60, 0), count: 30))
+        #expect(DetectionRules.sustainedCPUAnomaly(history: history, baseline: nil) == nil)
+        #expect(DetectionRules.wakeupsAnomaly(history: history, baseline: baseline) == nil)
+        #expect(DetectionRules.diskThrashAnomaly(history: history, baseline: baseline) == nil)
+        #expect(DetectionRules.networkThroughputAnomaly(history: history, baseline: baseline) == nil)
+        #expect(DetectionRules.sustainedPowerWatts(history: history, window: 600) == 0)
+        #expect(DetectionRules.chronicCPUAnomaly(robust: baseline.stats,
+            sample: history.last!, history: history) == nil)
+    }
+
+    @Test("variable cadence averages use time rather than sample count")
+    func cadenceWeighted() {
+        // One busy minute, then nine quiet minutes: 10%, not 33%.
+        let history = timeline([(60, 1), (270, 0), (270, 0)])
+        var thresholds = DetectionThresholds()
+        thresholds.sustainedCPUWindow = 600
+        thresholds.sustainedCPUPercent = 20
+        thresholds.diskFloorBytesPerSecond = 20_000_000
+        thresholds.networkFloorBytesPerSecond = 20_000_000
+        thresholds.wakeupsFloorPerSecond = 200
+        #expect(DetectionRules.sustainedCPUAnomaly(history: history, baseline: nil, thresholds: thresholds) == nil)
+        #expect(DetectionRules.diskThrashAnomaly(history: history, baseline: baseline, thresholds: thresholds) == nil)
+        #expect(DetectionRules.networkThroughputAnomaly(history: history, baseline: baseline, thresholds: thresholds) == nil)
+        #expect(DetectionRules.wakeupsAnomaly(history: history, baseline: baseline, thresholds: thresholds) == nil)
+        #expect(abs((DetectionRules.sustainedPowerWatts(history: history, window: 600) ?? -1) - 0.1) < 0.00001)
+    }
+
+    @Test("sleep gaps and resets cannot provide the missing duration")
+    func continuityRequired() {
+        let gap = timeline([(60, 1), (1800, 1)])
+        var reset = timeline(Array(repeating: (60, 1), count: 30))
+        reset[reset.count - 2] = ProcessSample(identity: identity(), timestamp: reset[reset.count - 2].timestamp,
+            cpuTimeSeconds: 0, residentBytes: 1_073_741_824, uptimeSeconds: 1740)
+        for history in [gap, reset] {
+            #expect(DetectionRules.sustainedCPUAnomaly(history: history, baseline: nil) == nil)
+            #expect(DetectionRules.wakeupsAnomaly(history: history, baseline: baseline) == nil)
+            #expect(DetectionRules.diskThrashAnomaly(history: history, baseline: baseline) == nil)
+            #expect(DetectionRules.networkThroughputAnomaly(history: history, baseline: baseline) == nil)
+            #expect(DetectionRules.sustainedPowerWatts(history: history, window: 600) == nil)
+        }
+    }
+
+    @Test("partial energy failures never fall back to CPU corroboration")
+    func partialEnergyStaysUnknown() {
+        var history = timeline(Array(repeating: (60, 1), count: 30))
+        let last = history.last!
+        history[history.count - 1] = ProcessSample(identity: last.identity, timestamp: last.timestamp,
+            cpuTimeSeconds: last.cpuTimeSeconds, residentBytes: last.residentBytes,
+            uptimeSeconds: last.uptimeSeconds, energyNanojoules: 0, interruptWakeups: last.interruptWakeups)
+        #expect(DetectionRules.wakeupsAnomaly(history: history, baseline: baseline) == nil)
+        #expect(DetectionRules.liveConditionActive(kind: .energyWakeups, history: history) == nil)
+    }
+
+    @Test("a component reset is not hidden by growth in the other direction")
+    func componentReset() {
+        let a = ProcessSample(identity: identity(), timestamp: Date(timeIntervalSince1970: 0),
+            cpuTimeSeconds: 1, residentBytes: 1, uptimeSeconds: 1,
+            diskBytesRead: 100, diskBytesWritten: 100, netBytesIn: 100, netBytesOut: 100)
+        let b = ProcessSample(identity: identity(), timestamp: Date(timeIntervalSince1970: 60),
+            cpuTimeSeconds: 2, residentBytes: 1, uptimeSeconds: 61,
+            diskBytesRead: 50, diskBytesWritten: 9_000_000_000, netBytesIn: 50, netBytesOut: 9_000_000_000)
+        #expect(DetectionRules.liveConditionActive(kind: .diskThrash, history: [a, b]) == nil)
+        #expect(DetectionRules.liveConditionActive(kind: .networkThroughput, history: [a, b]) == nil)
+    }
+
+    @Test("memory verification distinguishes growth from a large stable allocation")
+    func memoryGrowth() {
+        let stable = timeline([(60, 0)], memory: [4_000_000_000, 4_000_000_000])
+        let growing = timeline([(60, 0)], memory: [4_000_000_000, 4_100_000_000])
+        let shrinking = timeline([(60, 0)], memory: [4_100_000_000, 4_000_000_000])
+        for kind in [Anomaly.Kind.memoryLeakFootprint, .rssLeak] {
+            #expect(DetectionRules.liveConditionActive(kind: kind, history: stable) == false)
+            #expect(DetectionRules.liveConditionActive(kind: kind, history: growing) == true)
+            #expect(DetectionRules.liveConditionActive(kind: kind, history: shrinking) == false)
+            #expect(DetectionRules.liveConditionActive(kind: kind, history: [stable[0]]) == nil)
+        }
+    }
+
+    @Test("chronic CPU needs warm observations, a complete window, and current work")
+    func chronicNeedsCurrentEvidence() {
+        let warm = RobustStats(median: 62, mad: 5, count: 40)
+        let cold = RobustStats(median: 62, mad: 5, count: 2)
+        let busy = timeline(Array(repeating: (60, 0.62), count: 30))
+        let brief = Array(busy.suffix(3))
+        let cooled = timeline(Array(repeating: (60, 0.62), count: 30) + [(60, 0)])
+        #expect(DetectionRules.chronicCPUAnomaly(robust: warm, sample: busy.last!, history: busy) != nil)
+        #expect(DetectionRules.chronicCPUAnomaly(robust: cold, sample: busy.last!, history: busy) == nil)
+        #expect(DetectionRules.chronicCPUAnomaly(robust: warm, sample: brief.last!, history: brief) == nil)
+        #expect(DetectionRules.chronicCPUAnomaly(robust: warm, sample: cooled.last!, history: cooled) == nil)
     }
 }

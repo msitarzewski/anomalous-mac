@@ -45,9 +45,9 @@ private func baseline(median: Double, mad: Double, count: Int = 60, seasonal: Bo
     SelectedBaseline(stats: RobustStats(median: median, mad: mad, count: count), isSeasonal: seasonal)
 }
 
-@Suite("gpu.saturation — sustained per-process GPU share above the lineage's baseline")
+@Suite("gpu.saturation — recent GPU activity above the lineage's baseline")
 struct GPUSaturationRuleTests {
-    @Test("flags 80% device share sustained against a near-idle baseline")
+    @Test("flags an elevated GPU index against a near-idle baseline")
     func flagsSaturation() {
         let anomaly = DetectionRules.gpuSaturationAnomaly(
             history: proSamples(minutes: 15, gpuPercent: 80),
@@ -57,9 +57,60 @@ struct GPUSaturationRuleTests {
         #expect(anomaly?.kind == .gpuSaturation)
         #expect(anomaly?.kind.rawValue == "gpu.saturation")
         #expect(anomaly?.drivingMetric == "gpu_percent")
-        #expect(abs((anomaly?.magnitudeCurve.last ?? 0) - 80) < 2)   // curve in %
+        #expect(abs((anomaly?.magnitudeCurve.last ?? 0) - 80) < 2)   // legacy-scaled activity index
         #expect((anomaly?.baselineDeviation ?? 0) > 8)
         #expect(anomaly?.baselineValue == 2)                          // the quotable "usual"
+    }
+
+    @Test("GPU window excludes older heat and records only the requested observation span")
+    func recentWindowOnly() {
+        var history = proSamples(minutes: 60, gpuPercent: 90)
+        let anchor = history[50].gpuTimeMachAbs
+        for i in 51..<history.count {
+            history[i] = gpuSample(seconds: Double(i) * 60, counter: anchor)
+        }
+        #expect(DetectionRules.gpuSaturationAnomaly(history: history,
+            baseline: baseline(median: 2, mad: 1), secondsPerTick: fixtureSecondsPerTick) == nil)
+        let hot = DetectionRules.gpuSaturationAnomaly(history: proSamples(minutes: 60, gpuPercent: 90),
+            baseline: baseline(median: 2, mad: 1), secondsPerTick: fixtureSecondsPerTick)
+        #expect(hot?.windowSeconds == 600)
+    }
+
+    @Test("GPU rate weights intervals by elapsed time and clips the window boundary")
+    func weightedIntervals() {
+        let curve = DetectionRules.recentGPUCurve(history: [
+            gpuSample(seconds: 0, counter: 1), gpuSample(seconds: 60, counter: 6001),
+            gpuSample(seconds: 330, counter: 6001), gpuSample(seconds: 600, counter: 6001),
+        ], window: 600, maximumGap: 360)
+        #expect(curve?.average == 10)
+        let clipped = DetectionRules.recentGPUCurve(history: [
+            gpuSample(seconds: 0, counter: 1), gpuSample(seconds: 270, counter: 2701),
+            gpuSample(seconds: 540, counter: 5401), gpuSample(seconds: 810, counter: 8101),
+        ], window: 600, maximumGap: 360)
+        #expect(clipped?.average == 10)
+    }
+
+    @Test("unknown, reset, PID reuse, and sleep gaps cannot bridge a GPU window")
+    func continuityGates() {
+        let base = proSamples(minutes: 15, gpuPercent: 90)
+        for replacement in [
+            gpuSample(seconds: 12 * 60, counter: 0),
+            gpuSample(seconds: 12 * 60, counter: 1),
+            gpuSample(seconds: 12 * 60, counter: base[12].gpuTimeMachAbs,
+                process: ProcessIdentity(pid: 321, startAbsTime: 78, executableName: "lmstudio")),
+        ] {
+            var broken = base
+            broken[12] = replacement
+            #expect(DetectionRules.recentGPUCurve(history: broken, window: 600, maximumGap: 360) == nil)
+        }
+        #expect(DetectionRules.recentGPUCurve(history: [
+            gpuSample(seconds: 0, counter: 1), gpuSample(seconds: 3600, counter: 900000000),
+        ], window: 600, maximumGap: 360) == nil)
+    }
+
+    private func gpuSample(seconds: Double, counter: UInt64, process: ProcessIdentity = identity()) -> ProcessSample {
+        ProcessSample(identity: process, timestamp: Date(timeIntervalSince1970: 1_750_000_000 + seconds),
+            cpuTimeSeconds: 0, residentBytes: 0, uptimeSeconds: seconds, gpuTimeMachAbs: counter)
     }
 
     @Test("absolute floor: nobody's GPU dies at 5% — statistically loud stays silent")
@@ -165,6 +216,16 @@ struct NetworkThroughputRuleTests {
 
 @Suite("IOUserClientCreator pid parse — pure, shape-drift-safe")
 struct CreatorPIDParseTests {
+    @Test("malformed counters and overflow never produce partial GPU sums")
+    func malformedCounters() {
+        #expect(GPUSampler.accumulatedGPUTime(usage: [["accumulatedGPUTime": UInt64(7)], ["accumulatedGPUTime": UInt64(9)]]) == 16)
+        #expect(GPUSampler.accumulatedGPUTime(usage: [["accumulatedGPUTime": UInt64.max], ["accumulatedGPUTime": UInt64(1)]]) == nil)
+        #expect(GPUSampler.accumulatedGPUTime(usage: [["accumulatedGPUTime": UInt64(7)], ["renamed": 9]]) == nil)
+        #expect(GPUSampler.accumulatedGPUTime(usage: [["accumulatedGPUTime": -1]]) == nil)
+        #expect(GPUSampler.parseCreatorPID("pid 12invalid, app") == nil)
+        #expect(GPUSampler.parseCreatorPID("pid 12") == nil)
+    }
+
     @Test("the on-device shape parses")
     func parsesRealShapes() {
         #expect(GPUSampler.parseCreatorPID("pid 462, WindowServer") == 462)

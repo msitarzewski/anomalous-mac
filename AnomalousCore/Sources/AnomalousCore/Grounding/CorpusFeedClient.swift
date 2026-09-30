@@ -29,6 +29,7 @@ public struct CorpusFeedEntry: Codable, Sendable, Equatable {
     public let sources: [Source]?
     public let platform: String?
     public let correctedBy: String?
+    public let source: String?
 
     enum CodingKeys: String, CodingKey {
         case processName = "process_name"
@@ -43,12 +44,13 @@ public struct CorpusFeedEntry: Codable, Sendable, Equatable {
         case sources
         case platform
         case correctedBy = "corrected_by"
+        case source
     }
 
     public init(
         processName: String, displayName: String, whatItIs: String, ownedBy: String,
         whenHotImplies: String, safetyTier: Int, safeAction: String?, worstCase: String?,
-        causallyLinked: [String]?, sources: [Source]? = nil, platform: String? = nil, correctedBy: String? = nil
+        causallyLinked: [String]?, sources: [Source]? = nil, platform: String? = nil, correctedBy: String? = nil, source: String? = nil
     ) {
         self.processName = processName
         self.displayName = displayName
@@ -62,6 +64,7 @@ public struct CorpusFeedEntry: Codable, Sendable, Equatable {
         self.sources = sources
         self.platform = platform
         self.correctedBy = correctedBy
+        self.source = source
     }
 
     /// The grounding shape the judgment layer consumes.
@@ -75,10 +78,8 @@ public struct CorpusFeedEntry: Codable, Sendable, Equatable {
 }
 
 /// Pinned Ed25519 feed-signing public keys, `{key_id: base64 raw pubkey}` —
-/// rotation-ready. The production map is EMPTY until a `php artisan
-/// feed:keygen` run mints the key; with an empty map a `requireSignedFeed`
-/// client rejects every signed feed (fail closed) and keeps the shipped +
-/// last-verified corpus. Injectable so tests pin their own throwaway key.
+/// rotation-ready. Unknown keys are rejected and the shipped map remains
+/// available. Tests inject their own signing keys.
 public struct CorpusFeedKeys: Sendable {
     public let keys: [String: String]
 
@@ -185,7 +186,7 @@ public struct CorpusFeedClient: Sendable {
         keys: CorpusFeedKeys = .pinned,
         requireSignedFeed: Bool = true,
         storeURL: URL? = nil,
-        transport: @escaping Transport = { try await URLSession.shared.data(for: $0) }
+        transport: @escaping Transport = { try await ServerOverridePolicy.data(for: $0) }
     ) {
         self.baseURL = baseURL
         self.keys = keys
@@ -342,11 +343,12 @@ public struct CorpusFeedClient: Sendable {
     /// The pulled entries that apply locally — matched on
     /// (process_name, platform == 'macos'); a missing platform is treated as
     /// macOS (the feed's founding platform). Verified on load; an unverifiable
-    /// cache grounds nothing (the shipped map stands).
+    /// cache grounds nothing (the shipped map stands). Older signed automated
+    /// entries also stay excluded until human review, including while offline.
     public func persistedKnowledgeEntries(platform: String = "macos") -> [KnowledgeEntry] {
         guard let entries = loadVerifiedEntries() else { return [] }
         return entries
-            .filter { ($0.platform ?? "macos") == platform }
+            .filter { ($0.platform ?? "macos") == platform && ["reviewed", "community"].contains($0.source ?? "") }
             .map(\.knowledgeEntry)
     }
 

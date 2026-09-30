@@ -27,16 +27,32 @@ struct SettingsView: View {
     @State private var pendingTopupCents: Int?
 
     var body: some View {
-        TabView(selection: $appState.settingsTab) {
-            general.tabItem { Label("General", systemImage: "gearshape") }.tag(AppState.SettingsTab.general)
-            account.tabItem { Label("Account", systemImage: "person.crop.circle") }.tag(AppState.SettingsTab.account)
-            privacy.tabItem { Label("Privacy", systemImage: "hand.raised") }.tag(AppState.SettingsTab.privacy)
-            transparency.tabItem { Label("Transparency", systemImage: "eye") }.tag(AppState.SettingsTab.transparency)
-            about.tabItem { Label("About", systemImage: "info.circle") }.tag(AppState.SettingsTab.about)
+        VStack(spacing: 0) {
+            Picker("Settings section", selection: $appState.settingsTab) {
+                Text("General").tag(AppState.SettingsTab.general)
+                Text("Account").tag(AppState.SettingsTab.account)
+                Text("Privacy").tag(AppState.SettingsTab.privacy)
+                Text("Transparency").tag(AppState.SettingsTab.transparency)
+                Text("About").tag(AppState.SettingsTab.about)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+
+            Group {
+                switch appState.settingsTab {
+                case .general: general
+                case .account: account
+                case .privacy: privacy
+                case .transparency: transparency
+                case .about: about
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        // One frame is shared across all tabs, so size it to the TALLEST —
-        // Transparency, with its full "what we sample" list — so no tab
-        // scrolls, and a touch wider so the prose stops wrapping so tightly.
+        .scrollContentBackground(.hidden)
+        // Keep the window size stable when switching between settings tabs.
         .frame(width: 560, height: 640)
     }
 
@@ -462,7 +478,7 @@ struct SettingsView: View {
                     get: { appState.contributionEnabled },
                     set: { appState.contributionEnabled = $0 }
                 ))
-                Text("Only anonymous signatures (process name, version, OS, anomaly shape) are sent — never paths, arguments, or anything identifiable. Every transmission is recorded in the send log.")
+                Text("Optional and off until you choose it. Signatures include process identity, versions, hardware class, and anomaly measurements; no account, file paths, or command lines. Every payload is recorded in the send log.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
 
@@ -471,7 +487,7 @@ struct SettingsView: View {
                     get: { appState.discoveryEnabled },
                     set: { appState.discoveryEnabled = $0 }
                 ))
-                Text("When Anomalous doesn't recognize a process, send just its name (no personal data, no file paths) to our API to look up what it is. You get a real answer instead of a shrug — **Sourced by Anomalous** — and it's added to the shared knowledge map so everyone benefits. Every lookup is in your send log.")
+                Text("After your first lookup confirmation, research unfamiliar processes using their identity, versions, installation source, and anomaly type. Shared safety guidance requires review. Every lookup is in your send log.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
 

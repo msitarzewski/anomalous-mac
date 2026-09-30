@@ -69,7 +69,7 @@ Coordinated disclosure, **90-day** default. If a fix needs longer, the reporter 
 - Termination enforces a **pid-reuse guard**: the helper re-reads the target's start time and refuses if it doesn't match the caller's expectation — a confident wrong kill is worse than no kill.
 - The app degrades gracefully without the helper (unprivileged, user-only sampling); root is never *required*.
 - Escalation payloads are **composed on-device**, allowlisted by construction, and **logged byte-for-byte** locally before sending; command lines and paths never leave.
-- Telemetry is **anonymous by schema** (published in `protocol/`), never account-linked; the send log is diffable against this source.
+- Contribution requires consent and omits account identifiers, paths and arguments (schema in `protocol/`). Transport infrastructure can still observe IP addresses. Paid help is separately account-linked. Diagnostic request bodies are logged locally.
 - Developer ID signed, hardened runtime, notarized; the helper is embedded and signed inside-out.
 
 ### Root helper trust model

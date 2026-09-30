@@ -12,6 +12,7 @@ private func anomaly(
     pid: pid_t = 123,
     drivingMetric: String = "cpu_percent",
     deviation: Double? = nil,
+    requiresCorroboration: Bool = false,
     confidence: Confidence = Confidence(score: 1)
 ) -> Anomaly {
     Anomaly(
@@ -23,7 +24,8 @@ private func anomaly(
         detectedAt: .now,
         drivingMetric: drivingMetric,
         baselineDeviation: deviation,
-        confidence: confidence
+        confidence: confidence,
+        requiresCorroboration: requiresCorroboration
     )
 }
 
@@ -177,7 +179,7 @@ struct ConfidenceEngineTests {
         #expect(abs(c.score - 0.5) < 0.001)
     }
 
-    @Test("2-of-N: two rules agreeing crosses the surfacing bar")
+    @Test("a second measurement family crosses the surfacing bar")
     func twoRulesAgreeingSurface() {
         let c = ConfidenceEngine.score(for: anomaly(kind: .energyWakeups, deviation: 8), agreeingRules: 1, signals: signals())
         #expect(c.level == .high)
@@ -223,8 +225,8 @@ struct ConfidenceEngineTests {
         #expect(calm.first?.systemContext == nil)
     }
 
-    @Test("annotate scores each candidate against the others (agreement = peers)")
-    func annotateCountsPeers() {
+    @Test("distinct measurement families corroborate one another")
+    func annotateCountsMeasurementFamilies() {
         let annotated = ConfidenceEngine.annotate(
             [anomaly(kind: .energyWakeups, deviation: 8), anomaly(kind: .diskThrash, drivingMetric: "disk_bytes_per_sec", deviation: 8)],
             signals: signals()
@@ -232,6 +234,90 @@ struct ConfidenceEngineTests {
         #expect(annotated.count == 2)
         #expect(annotated.allSatisfy { $0.confidence.level == .high })
     }
+
+    @Test("repeating the same statistical rule cannot manufacture high confidence")
+    func duplicateStatisticalRulesStayQuiet() {
+        let candidate = anomaly(kind: .energyWakeups, deviation: 8)
+        let alone = ConfidenceEngine.annotate([candidate], signals: signals())
+        let duplicated = ConfidenceEngine.annotate(Array(repeating: candidate, count: 5), signals: signals())
+        #expect(duplicated.allSatisfy { $0.confidence == alone[0].confidence })
+        #expect(duplicated.allSatisfy { $0.confidence.level == .medium })
+    }
+
+    @Test("lifetime and sustained CPU remain one evidence family")
+    func cpuRulesDoNotCorroborateEachOther() {
+        let annotated = ConfidenceEngine.annotate(
+            [anomaly(kind: .cpuTimeRatio), anomaly(kind: .sustainedCPU)], signals: signals()
+        )
+        #expect(annotated.allSatisfy { abs($0.confidence.score - 0.8) < 0.001 })
+    }
+
+    @Test("leak, ceiling and footprint rules cannot erase the pressure discount")
+    func memoryRulesDoNotCorroborateEachOtherUnderPressure() {
+        let candidates = [Anomaly.Kind.rssLeak, .rssCeiling, .memoryLeakFootprint].map { anomaly(kind: $0) }
+        let annotated = ConfidenceEngine.annotate(candidates, signals: signals(memoryPressure: 2))
+        #expect(annotated.allSatisfy { abs($0.confidence.score - 0.4) < 0.001 })
+        #expect(annotated.allSatisfy { $0.confidence.level == .low })
+        #expect(annotated.allSatisfy { $0.systemContext?.contains("memory pressure") == true })
+    }
+
+    @Test("one physical family only corroborates once even when several rules fire")
+    func duplicateOtherFamilyDoesNotInflateAgreement() {
+        let wakeups = anomaly(kind: .energyWakeups, deviation: 8)
+        let once = ConfidenceEngine.annotate([wakeups, anomaly(kind: .cpuTimeRatio)], signals: signals())
+        let repeated = ConfidenceEngine.annotate(
+            [wakeups, anomaly(kind: .cpuTimeRatio), anomaly(kind: .sustainedCPU)], signals: signals()
+        )
+        #expect(repeated[0].confidence == once[0].confidence)
+        #expect(abs(repeated[0].confidence.score - 0.8) < 0.001)
+    }
+
+    @Test("distinct resource corroboration retains the full memory pressure discount")
+    func independentFamilyPreservesPressureDiscount() {
+        let candidates = [anomaly(kind: .rssCeiling), anomaly(kind: .diskThrash, deviation: 8)]
+        let calm = ConfidenceEngine.annotate(candidates, signals: signals())
+        let duress = ConfidenceEngine.annotate(candidates, signals: signals(memoryPressure: 2))
+        // The pre-clamp score is 0.8 + 0.3 - 0.4, so this remains below high.
+        #expect(abs(duress[0].confidence.score - 0.7) < 0.001)
+        #expect(duress[0].confidence.level == .medium)
+        #expect(duress[1].confidence == calm[1].confidence)
+    }
+
+    @Test("chronic CPU stays medium without a different measurement family")
+    func chronicCPURequiresDistinctCorroboration() {
+        let chronic = anomaly(kind: .sustainedCPU, requiresCorroboration: true)
+        let alone = ConfidenceEngine.annotate([chronic], signals: signals())
+        #expect(alone[0].confidence.level == .medium)
+        #expect(abs(alone[0].confidence.score - 0.5) < 0.001)
+        let sameCPU = ConfidenceEngine.annotate([chronic, anomaly(kind: .cpuTimeRatio)], signals: signals())
+        #expect(sameCPU[0].confidence == alone[0].confidence)
+        for kind in [Anomaly.Kind.energyWakeups, .diskThrash] {
+            let corroborated = ConfidenceEngine.annotate([chronic, anomaly(kind: kind, deviation: 8)], signals: signals())
+            #expect(corroborated[0].confidence.level == .high)
+            #expect(abs(corroborated[0].confidence.score - 0.8) < 0.001)
+        }
+    }
+
+    @Test("annotation recomputes stale high scores before reuse or resurfacing")
+    func staleHighConfidenceCannotBypassCorroboration() {
+        let chronic = anomaly(kind: .sustainedCPU, requiresCorroboration: true, confidence: Confidence(score: 1))
+        let refreshed = ConfidenceEngine.annotate([chronic], signals: signals())
+        #expect(refreshed[0].confidence.level == .medium)
+        let staleWakeups = anomaly(kind: .energyWakeups, deviation: 8, confidence: Confidence(score: 1))
+        let duplicateFamily = ConfidenceEngine.annotate([staleWakeups, staleWakeups], signals: signals())
+        #expect(duplicateFamily.allSatisfy { $0.confidence.level == .medium })
+        #expect(duplicateFamily.allSatisfy { abs($0.confidence.score - 0.5) < 0.001 })
+    }
+
+    @Test("identity novelty is not another physical observation")
+    func novelIdentityDoesNotCorroborateResourceUse() {
+        let annotated = ConfidenceEngine.annotate(
+            [anomaly(kind: .energyWakeups, deviation: 8), anomaly(kind: .novelProcess)], signals: signals()
+        )
+        #expect(annotated[0].confidence.level == .medium)
+        #expect(abs(annotated[1].confidence.score - 0.8) < 0.001)
+    }
+
 }
 
 @Suite("grouping — one insight per underlying event, never five notifications")

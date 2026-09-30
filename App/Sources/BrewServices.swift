@@ -63,11 +63,15 @@ enum BrewServices {
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = FileHandle.nullDevice
-            process.terminationHandler = { proc in
-                let out = try? pipe.fileHandleForReading.readToEnd()
-                continuation.resume(returning: proc.terminationStatus == 0 ? (out ?? Data()) : nil)
+            do { try process.run() } catch { continuation.resume(returning: nil); return }
+            // Drain stdout until brew closes it. Reading only after exit
+            // deadlocks once output outgrows the pipe buffer (~64 KB): brew
+            // blocks on the full pipe and never exits.
+            DispatchQueue.global(qos: .utility).async {
+                let output = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                continuation.resume(returning: process.terminationStatus == 0 ? output : nil)
             }
-            do { try process.run() } catch { continuation.resume(returning: nil) }
         }
     }
 }

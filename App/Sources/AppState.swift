@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Observation
 import AppKit
 import WidgetKit
@@ -55,6 +56,9 @@ final class AppState {
         /// The grounded baseline sentence used for judgment — reused verbatim
         /// when composing an escalation payload (safe fields only).
         let baselineSentence: String
+        var suggestedActionText: String {
+            anomaly.kind == .gpuSaturation ? JudgmentToolFormatter.gpuGuidance : card.suggestedAction
+        }
         var escalation: EscalationState = .idle
         /// Discovery (opt-in identity lookup) state and any cited sources it
         /// returned. `sourced`/sources drive the "Sourced by Anomalous" UI.
@@ -165,7 +169,7 @@ final class AppState {
     enum EscalationState: Equatable {
         /// `needsCredit` is distinct from `failed`: the fix isn't "retry", it's
         /// "top up" — so the card offers Add credit (→ Account), not Retry.
-        case idle, sending, sent(Int), completed(EscalationClient.ExpertResult), needsCredit, failed(String)
+        case idle, sending, sent(Int), completed(EscalationClient.ExpertResult), needsCredit, requestRemoved, failed(String)
     }
 
     /// Which Settings tab to show — lets a card deep-link (e.g. "Add credit" →
@@ -215,12 +219,15 @@ final class AppState {
     /// judgment core consumes it to weigh anomalies against machine state.
     private(set) var systemSignals: SystemSignals?
 
-    /// Contribution is core to the product (contributors are the supply
+    /// Contribution is optional (contributors are the supply
     /// side) — disclosed plainly in the popover, toggleable, and every
     /// send is in the byte-for-byte log the user can open.
     var contributionEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: "contributionEnabled") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "contributionEnabled") }
+        get { UserDefaults.standard.bool(forKey: "contributionConsentV1") && UserDefaults.standard.bool(forKey: "contributionEnabled") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "contributionEnabled")
+            UserDefaults.standard.set(true, forKey: "contributionConsentV1")
+        }
     }
 
     /// Granular consent, SEPARATE from contribution: when Anomalous doesn't
@@ -229,7 +236,7 @@ final class AppState {
     /// dead-end shrug. Every lookup is in the send log; a per-card "Look it
     /// up" tap can still discover a single process while this is OFF.
     var discoveryEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: "discoveryEnabled") as? Bool ?? true }
+        get { UserDefaults.standard.object(forKey: "discoveryEnabled") == nil || UserDefaults.standard.bool(forKey: "discoveryEnabled") }
         set { UserDefaults.standard.set(newValue, forKey: "discoveryEnabled") }
     }
 
@@ -262,10 +269,6 @@ final class AppState {
             Task { await journal.setMaxEntries(newValue); journalEntries = await journal.recent() }
         }
     }
-
-    /// True while the popover is showing. Discovery polling stops when it
-    /// closes (the result still lands in the corpus server-side for next time).
-    var popoverIsOpen = true
 
     let sendLogDirectory = URL.applicationSupportDirectory
         .appending(path: "Anomalous/send-log", directoryHint: .isDirectory)
@@ -323,23 +326,24 @@ final class AppState {
     /// password — dev features stay locked until the real hash is baked in.
     static let devPasswordHash = "efc84df9fc799a353a6981cc57541b3644e7bbf47dcda7c02c4215b510bc1c50"
 
-    /// The server the app talks to, resolved in order: (1) the ANOMALOUS_SERVER
-    /// env var (scripted/dev launches), (2) the developer override — ONLY when
-    /// dev features are unlocked AND the switch is on, (3) production. The
+    /// Debug builds can use ANOMALOUS_SERVER. Release builds ignore environment
+    /// overrides and permit only an explicitly enabled loopback developer server. The
     /// override is restricted to a LOOPBACK host in release builds — a shipped
     /// app can only ever be pointed at the user's OWN machine for local testing,
     /// never redirected to a rogue remote that would capture the account token
     /// and triage payloads.
     static var resolvedServer: String {
-        if let env = ProcessInfo.processInfo.environment["ANOMALOUS_SERVER"], !env.isEmpty {
-            return env
-        }
         let defaults = UserDefaults.standard
-        if defaults.bool(forKey: devUnlockedKey), defaults.bool(forKey: devServerEnabledKey) {
-            let url = defaults.string(forKey: devServerURLKey) ?? defaultDevServer
-            if !url.isEmpty, isAllowedOverride(url) { return url }
-        }
-        return "https://api.anomalous.bot"
+        let override = defaults.bool(forKey: devUnlockedKey) && defaults.bool(forKey: devServerEnabledKey)
+            ? defaults.string(forKey: devServerURLKey) ?? defaultDevServer : nil
+        #if DEBUG
+        let isDebug = true
+        #else
+        let isDebug = false
+        #endif
+        return ServerOverridePolicy.resolve(
+            environment: ProcessInfo.processInfo.environment["ANOMALOUS_SERVER"],
+            developerOverride: override, isDebug: isDebug)
     }
 
     /// True when the app is pointed at a local/dev server rather than
@@ -409,7 +413,7 @@ final class AppState {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await ServerOverridePolicy.data(for: request)
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             switch code {
@@ -445,7 +449,7 @@ final class AppState {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["invite_code": code, "email": mail])
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await ServerOverridePolicy.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             if status == 201, let token = json?["token"] as? String, !token.isEmpty {
@@ -494,7 +498,7 @@ final class AppState {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await ServerOverridePolicy.data(for: request)
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             if code == 201, let urlString = json?["checkout_url"] as? String, let url = URL(string: urlString) {
@@ -593,18 +597,22 @@ final class AppState {
         // rejected and the last verified corpus (or the shipped map alone)
         // stands. ANOMALOUS_ALLOW_UNSIGNED_FEED=1 is the dev override for a
         // local server that has no signing key configured.
-        let corpus = CorpusFeedClient(
-            baseURL: URL(string: server)!,
-            requireSignedFeed: ProcessInfo.processInfo.environment["ANOMALOUS_ALLOW_UNSIGNED_FEED"] == nil
-        )
+        #if DEBUG
+        let requireSignedFeed = ProcessInfo.processInfo.environment["ANOMALOUS_ALLOW_UNSIGNED_FEED"] == nil
+        #else
+        let requireSignedFeed = true
+        #endif
+        let corpus = CorpusFeedClient(baseURL: URL(string: server)!, requireSignedFeed: requireSignedFeed)
         corpusClient = corpus
         knowledgeMap = (try? KnowledgeMap.shipped()).map { corpus.mergedKnowledgeMap(base: $0) }
         var t = DetectionThresholds()
+        #if DEBUG
         if ProcessInfo.processInfo.environment["ANOMALOUS_DEMO"] != nil {
             t.cpuTimeRatio = 0.05
             t.cpuTimeRatioMinimumUptime = 300
             print("[anomalous] DEMO thresholds active")
         }
+        #endif
         thresholds = t
 
         // Mint the shared HMAC key on first launch (idempotent). The widget
@@ -898,6 +906,8 @@ final class AppState {
         // flagged). Anything shown but NOT in here has resolved — see the prune below.
         var activeIds: Set<ProcessIdentity> = []
 
+        var lineageObservations: [String: [[BaselineMetric: Double]]] = [:]
+        var excludedLineages: Set<String> = []
         for sample in samples {
             let previous = history[sample.identity]?.last
             history[sample.identity, default: []].append(sample)
@@ -918,27 +928,27 @@ final class AppState {
                 }
             }
 
-            // Flag status FIRST — it decides whether this tick's readings may
-            // teach the baseline: a flagged runaway burning for two days must
-            // not teach the store that burning is normal (only Phase 4's
-            // explicit acknowledgment may move the envelope).
+            // Restore suppression state independently from baseline learning.
+            // Learning is committed only after all sibling candidates are known.
             if !alreadyFlagged.contains(sample.identity), await baselineStore.isFlagged(sample.identity) {
                 alreadyFlagged.insert(sample.identity)
             }
             let flagged = alreadyFlagged.contains(sample.identity)
 
-            // Feed baselines and fetch the judgment inputs in ONE actor hop
-            // (Δ-rates need two samples; a first-seen process records nothing
-            // and judges nothing — the outermost warm-up).
+            // Select without learning: no sibling can alter another sibling's
+            // baseline during this tick. Clean lineages are committed below.
             var judgment: [BaselineMetric: SelectedBaseline] = [:]
             if let previous {
                 let dt = sample.timestamp.timeIntervalSince(previous.timestamp)
-                if dt > 0 {
+                if dt > 0, dt <= thresholds.maximumSampleGap {
+                    let key = BaselineStore.key(for: sample.identity)
+                    let observations = Self.tickObservations(previous: previous, current: sample, dt: dt)
+                    lineageObservations[key, default: []].append(observations)
                     let tick = await baselineStore.recordTick(
-                        key: BaselineStore.key(for: sample.identity),
+                        key: key,
                         at: sample.timestamp,
-                        observations: Self.tickObservations(previous: previous, current: sample, dt: dt),
-                        feedBaselines: !flagged,
+                        observations: observations,
+                        feedBaselines: false,
                         seasonalMinimum: thresholds.seasonalMinimumObservations
                     )
                     judgment = tick.baselines
@@ -948,7 +958,12 @@ final class AppState {
             // EVERY rule's verdict, not first-match: agreement across
             // dimensions is the confidence signal, and grouping needs the
             // full set to pick a primary.
-            let candidates = candidateAnomalies(for: sample, judgment: judgment)
+            let candidates = ConfidenceEngine.annotate(
+                candidateAnomalies(for: sample, judgment: judgment), signals: systemSignals
+            )
+            if !candidates.isEmpty {
+                excludedLineages.insert(BaselineStore.key(for: sample.identity))
+            }
 
             // Already diagnosed this instance (in-memory this session, or a
             // persisted flag from a previous launch). Don't re-diagnose or
@@ -958,8 +973,11 @@ final class AppState {
             // would otherwise hide behind "All systems nominal" until the flag
             // expires. A known runaway must never be silently hidden.
             if flagged {
-                if stillActive(sample, candidates: candidates) { activeIds.insert(sample.identity) }
-                if let ackSuppressed = await resurfaceIfStillActive(sample, candidates: candidates) {
+                // Cached cards must meet the same current evidence gate as new ones.
+                let surfacingCandidates = candidates.filter { $0.confidence.level == .high }
+                quiet.append(contentsOf: candidates.filter { $0.confidence.level != .high })
+                if stillActive(sample, candidates: surfacingCandidates) { activeIds.insert(sample.identity) }
+                if let ackSuppressed = await resurfaceIfStillActive(sample, candidates: surfacingCandidates) {
                     // Acked-within-envelope: off the UI, but visible in the
                     // quiet findings (transparency panel) — never invisible.
                     quiet.append(ackSuppressed)
@@ -968,8 +986,7 @@ final class AppState {
             }
 
             guard !candidates.isEmpty else { continue }
-            let scored = ConfidenceEngine.annotate(candidates, signals: systemSignals)
-            guard let primary = AnomalyGrouper.collapseSameProcess(scored) else { continue }
+            guard let primary = AnomalyGrouper.collapseSameProcess(candidates) else { continue }
             if primary.confidence.level == .high {
                 // Phase 4 acknowledgment gate, at the surfacing site: a
                 // condition the user marked "normal for me" stays off the UI
@@ -1001,6 +1018,10 @@ final class AppState {
                 print("[anomalous] quiet finding: \(primary.kind.rawValue) in \(primary.identity.executableName) (confidence \(primary.confidence.level.rawValue) \(String(format: "%.2f", primary.confidence.score)), \(primary.drivingMetric) \(primary.baselineDeviation.map { String(format: "%.1f", $0) } ?? "?") MADs)")
             }
         }
+        await baselineStore.recordHealthyLineages(
+            lineageObservations, excluding: excludedLineages,
+            at: samples.map(\.timestamp).max() ?? .now
+        )
         quietFindings = quiet
 
         // Correlation across processes: causally-linked anomalies from the
@@ -1381,7 +1402,7 @@ final class AppState {
                 }
                 self.resolveDiscovery(.failed("Lookup timed out"), lineage: lineage, id: id)
             } catch {
-                self.resolveDiscovery(.failed("Couldn't reach the service"), lineage: lineage, id: id)
+                self.resolveDiscovery(.failed(DiscoveryClient.failureMessage(for: error)), lineage: lineage, id: id)
                 print("[anomalous] discovery failed for \(anomaly.identity.executableName): \(error.localizedDescription)")
             }
         }
@@ -1484,7 +1505,7 @@ final class AppState {
             // sustained rule didn't already fire, so we never double-flag CPU.
             robust: judgment[.cpuPercent]?.stats,
             sample: sample,
-            observedSpan: hist.count >= 2 ? sample.timestamp.timeIntervalSince(hist.first!.timestamp) : nil,
+            history: hist,
             thresholds: thresholds
         ) {
             found.append(a)
@@ -1607,7 +1628,7 @@ final class AppState {
             bundleID: judged.anomaly.identity.bundleID,
             kind: judged.anomaly.kind.rawValue,
             summary: judged.card.whatItIs,
-            action: judged.card.suggestedAction,
+            action: judged.suggestedActionText,
             safetyTier: judged.card.actionSafetyTier,
             judgedByModel: judged.judgedByModel,
             detectedAt: judged.anomaly.detectedAt,
@@ -2014,15 +2035,31 @@ final class AppState {
         }
     }
 
+    /// Stable key for an anomaly's paid-help submission: the same server,
+    /// account, process lineage and condition always map to the same key, so
+    /// Retry resends the stored submission instead of charging again.
+    private func submissionKey(for judged: JudgedAnomaly) -> String {
+        let identity = "\(serverBaseURL.absoluteString)|\(accountToken)|\(BaselineStore.key(for: judged.anomaly.identity))|\(judged.anomaly.kind.rawValue)"
+        let digest = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+        return "pendingTriage.\(digest)"
+    }
+
+    private func submissionURL(key: String) -> URL {
+        sendLogDirectory.deletingLastPathComponent().appending(path: "PendingTriage/\(key).json")
+    }
+
+    private func saveSubmission(_ submission: EscalationClient.PendingSubmission, key: String) throws {
+        let url = submissionURL(key: key)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        try JSONEncoder().encode(submission).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
     /// Escalate a thin local diagnosis to the paid triage service. Composes
     /// the account-linked payload (safe fields only — see PayloadComposer),
     /// logs it byte-for-byte, and POSTs it. Only reachable when an account
     /// token is configured; the anonymous flow is never involved.
-    /// A submitted-but-not-yet-answered triage per anomaly, so Retry can RESUME
-    /// polling the same job instead of POSTing a new one (each POST debits the
-    /// submission charge upfront — a re-POST would charge again).
-    private var pendingTriageID: [UUID: Int] = [:]
-
     func escalate(_ judged: JudgedAnomaly) async {
         guard canEscalate, let index = anomalies.firstIndex(where: { $0.id == judged.id }) else { return }
         anomalies[index].escalation = .sending
@@ -2033,16 +2070,36 @@ final class AppState {
             osVersion: serverDescription.isEmpty ? "" : Self.osVersionString,
             hardwareClass: SignatureComposer.hardwareClass
         )
+        let key = submissionKey(for: judged)
+        let client = escalationClient()
         do {
-            let accepted = try await escalationClient().escalate(payload)
-            pendingTriageID[judged.id] = accepted.id
+            var submission: EscalationClient.PendingSubmission
+            if FileManager.default.fileExists(atPath: submissionURL(key: key).path) {
+                submission = try JSONDecoder().decode(EscalationClient.PendingSubmission.self, from: Data(contentsOf: submissionURL(key: key)))
+            } else {
+                submission = .init(payload: payload)
+                try saveSubmission(submission, key: key)
+            }
+            if let acceptedID = submission.acceptedID {
+                try await pollTriage(id: acceptedID, for: judged, key: key, client: client)
+                return
+            }
+            let accepted = try await client.escalate(submission.payload, idempotencyKey: submission.idempotencyKey)
+            submission.acceptedID = accepted.id
+            try saveSubmission(submission, key: key)
+            guard submissionKey(for: judged) == key else { return }
             setEscalation(.sent(accepted.id), for: judged)
             print("[anomalous] escalated \(judged.anomaly.identity.executableName): triage #\(accepted.id)")
-            try await pollTriage(id: accepted.id, for: judged)
+            try await pollTriage(id: accepted.id, for: judged, key: key, client: client)
+        } catch EscalationClient.EscalationError.requestRemoved {
+            guard submissionKey(for: judged) == key else { return }
+            setEscalation(.requestRemoved, for: judged)
         } catch EscalationClient.EscalationError.insufficientBalance {
+            guard submissionKey(for: judged) == key else { return }
             // Not a retryable failure — the fix is to add credit.
             setEscalation(.needsCredit, for: judged)
         } catch {
+            guard submissionKey(for: judged) == key else { return }
             setEscalation(.failed(Self.escalationMessage(error)), for: judged)
             print("[anomalous] escalation failed: \(error)")
         }
@@ -2052,23 +2109,26 @@ final class AppState {
     /// polling it (the answer is likely just still cooking — no new POST, no
     /// second charge). Only start a fresh triage when there's nothing to resume.
     func retryEscalation(_ judged: JudgedAnomaly) async {
-        guard canEscalate else { return }
-        guard let id = pendingTriageID[judged.id] else { await escalate(judged); return }
-        setEscalation(.sent(id), for: judged)
+        await escalate(judged)
+    }
+
+    /// Only the explicit new-diagnosis action discards a deleted request's key.
+    func startNewEscalation(_ judged: JudgedAnomaly) async {
         do {
-            try await pollTriage(id: id, for: judged)
-        } catch EscalationClient.EscalationError.insufficientBalance {
-            setEscalation(.needsCredit, for: judged)
+            let url = submissionURL(key: submissionKey(for: judged))
+            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+            await escalate(judged)
         } catch {
-            setEscalation(.failed(Self.escalationMessage(error)), for: judged)
+            setEscalation(.failed("Couldn't clear the old request. Try again."), for: judged)
         }
     }
 
     /// Poll for the expert diagnosis and show it. The research runs server-side
     /// (queued Claude, ~a minute), so the window generously covers it.
-    private func pollTriage(id: Int, for judged: JudgedAnomaly) async throws {
-        let result = try await escalationClient().awaitResult(id: id, attempts: 60, interval: .seconds(2))
-        pendingTriageID[judged.id] = nil
+    private func pollTriage(id: Int, for judged: JudgedAnomaly, key: String, client: EscalationClient) async throws {
+        let result = try await client.awaitResult(id: id, attempts: 60, interval: .seconds(2))
+        guard submissionKey(for: judged) == key else { return }
+        try FileManager.default.removeItem(at: submissionURL(key: key))
         setEscalation(.completed(result), for: judged)
         // Persist the paid answer by condition so it survives auto-resolve →
         // re-detection: the user paid once, they keep the answer.
@@ -2077,6 +2137,7 @@ final class AppState {
             processKey: BaselineStore.key(for: judged.anomaly.identity),
             kind: judged.anomaly.kind
         )
+        guard submissionKey(for: judged) == key else { return }
         // The answer is keyed by CONDITION (processKey|kind), not pid — so every
         // sibling instance of the same program + kind on screen right now gets it
         // at once (two hot CGPDFService helpers both go "magic"), instead of
@@ -2137,7 +2198,7 @@ final class AppState {
         case .rssCeiling, .rssLeak, .memoryLeakFootprint:
             share = MachineLoad.memoryPercent(megabytes: current)
         case .gpuSaturation:
-            share = min(100, current)
+            share = nil // Summed driver counters do not establish whole-GPU utilization.
         default:
             share = nil
         }
@@ -2156,22 +2217,10 @@ final class AppState {
     // nonisolated: a pure function of the anomaly, safe to compose the glance
     // from any context (JudgedAnomaly.glance is used off the main actor).
     nonisolated private static func observation(for anomaly: Anomaly) -> String {
-        let hours = anomaly.windowSeconds / 3600
-        let duration: String
-        if hours >= 48 { duration = "for \(plural(Int(hours / 24), "day"))" }
-        else if hours >= 1 { duration = "for \(plural(Int(hours), "hour"))" }
-        else {
-            // Precise + dynamic: exact seconds under a minute ("for 45 seconds"),
-            // whole minutes otherwise ("for 15 minutes") — never a vague floor.
-            let secs = Int(anomaly.windowSeconds.rounded())
-            duration = secs >= 60 ? "for \(plural(secs / 60, "minute"))"
-                                  : "for \(plural(max(1, secs), "second"))"
-        }
         let current = anomaly.magnitudeCurve.last ?? 0
-        // A just-flagged anomaly hasn't been going long enough for its duration
-        // to be the story — never say "non-stop for 1 second". Only cite a
-        // duration once it's actually sustained (≥ a minute).
-        let durationIsMeaningful = anomaly.windowSeconds >= 60
+        // The history span does not establish how long the latest level persisted.
+        let duration = ""
+        let durationIsMeaningful = false
 
         switch anomaly.kind {
         case .sustainedCPU:
@@ -2201,10 +2250,7 @@ final class AppState {
         case .rssLeak, .memoryLeakFootprint:
             let cur = MachineLoad.memoryPercent(megabytes: current)
             let base = anomaly.baselineValue.map { MachineLoad.memoryPercent(megabytes: $0) }
-            // Only cite how long it's been climbing once that's actually a story;
-            // a fresh flag just reads "its memory is climbing", present tense.
-            let lead = durationIsMeaningful ? "Its memory has been climbing \(duration) — now "
-                                            : "Its memory is climbing — now "
+            let lead = "Its recorded memory use has been climbing — now "
             return lead + MachineGlance.sentence(
                 resource: .memory, currentMachinePercent: cur,
                 baselineMachinePercent: base ?? cur, duration: duration,
@@ -2228,18 +2274,13 @@ final class AppState {
             // Terse and differentiating: the wake-up rate is the story. The
             // longer "busy-wait pattern" explanation is dropped from the
             // always-visible line so a stack of these doesn't repeat verbatim.
-            return "It's waking the processor about \(Int(current)) times a second \(duration) — draining the battery."
+            return "The latest sample records about \(Int(current)) processor wakeups per second — above its usual level."
         case .diskThrash:
-            return "It has been reading and writing about \(Int(current)) MB per second of disk \(duration) — well above its usual."
+            return "The latest sample records about \(Int(current)) MB per second of disk activity — above its usual level."
         case .gpuSaturation:
-            // GPU utilization can report above 100% (summed engines), but "338%
-            // of the GPU" reads as broken — clamp to the believable ceiling, and
-            // once it's maxed just say so.
-            let gpu = Int(min(100, max(0, current)).rounded())
-            let usage = gpu >= 95 ? "nearly all of the GPU" : "about \(gpu)% of the GPU"
-            return "It has been using \(usage) \(duration) — far more than it usually needs."
+            return JudgmentToolFormatter.gpuObservation(current: current, baseline: anomaly.baselineValue)
         case .networkThroughput:
-            return "It has been moving about \(Int(current)) MB per second over the network \(duration) — more than its usual."
+            return "The latest sample records about \(Int(current)) MB per second over the network — above its usual level."
         }
     }
 

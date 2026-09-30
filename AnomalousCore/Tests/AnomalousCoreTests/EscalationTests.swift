@@ -52,6 +52,17 @@ struct EscalationPayloadTests {
         }
     }
 
+    @Test("pending paid submission survives reload with the same payload and key")
+    func pendingSubmissionRoundTrip() throws {
+        let payload = PayloadComposer().compose(anomaly: anomaly(), baselineSentence: "original", osVersion: "27.0", hardwareClass: "x")
+        var pending = EscalationClient.PendingSubmission(payload: payload)
+        pending.acceptedID = 42
+        let restored = try JSONDecoder().decode(EscalationClient.PendingSubmission.self, from: JSONEncoder().encode(pending))
+        #expect(restored.idempotencyKey == pending.idempotencyKey)
+        #expect(restored.payload.summary == payload.summary)
+        #expect(restored.acceptedID == 42)
+    }
+
     @Test("escalation client logs the exact bytes before sending")
     func logsBeforeSend() async throws {
         let dir = FileManager.default.temporaryDirectory.appending(path: "esc-test-\(UUID().uuidString)")

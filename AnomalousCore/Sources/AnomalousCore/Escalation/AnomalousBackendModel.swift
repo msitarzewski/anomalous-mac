@@ -109,7 +109,7 @@ public struct AnomalousBackendModel: LanguageModel {
             let result = try await client.awaitResult(id: accepted.id)
 
             let text = try Self.responseText(for: result)
-            await channel.send(LanguageModelExecutorGenerationChannel.Response.response(
+            await channel.send(LanguageModelExecutorGenerationChannel.Event.response(
                 action: .appendText(text, tokenCount: max(1, text.count / 4))
             ))
         }
