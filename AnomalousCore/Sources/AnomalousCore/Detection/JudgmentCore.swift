@@ -307,8 +307,11 @@ public enum AnomalyGrouper {
         guard let deviation = anomaly.baselineDeviation, !anomaly.drivingMetric.isEmpty else {
             return anomaly.kind.rawValue
         }
-        if deviation.isFinite {
-            return "\(anomaly.kind.rawValue) (\(anomaly.drivingMetric) \(Int(deviation.rounded())) MADs above baseline)"
+        // A near-flat baseline makes the deviation astronomically large without
+        // being infinite; `Int(_:)` traps past Int.max, so only whole numbers
+        // that fit are quoted and everything else reads as "far above".
+        if deviation.isFinite, let mads = Int(exactly: deviation.rounded()) {
+            return "\(anomaly.kind.rawValue) (\(anomaly.drivingMetric) \(mads) MADs above baseline)"
         }
         return "\(anomaly.kind.rawValue) (\(anomaly.drivingMetric) far above a flat baseline)"
     }

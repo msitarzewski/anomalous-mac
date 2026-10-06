@@ -898,7 +898,8 @@ struct DiagnosisCardView: View {
         let a = judged.anomaly
         let current = a.magnitudeCurve.last
         let baseline = a.baselineValue
-        func whole(_ v: Double) -> String { "\(Int(v.rounded()))" }
+        // `Int(_:)` traps on NaN or values past Int.max; show a dash instead.
+        func whole(_ v: Double) -> String { Int(exactly: v.rounded()).map(String.init) ?? "—" }
         func metricRow(_ label: String, _ unit: String, note: String = "") -> DetailRow? {
             guard let current else { return nil }
             var value = "\(whole(current))\(unit)"

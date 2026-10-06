@@ -332,6 +332,28 @@ struct AnomalyGrouperTests {
         #expect(primary?.alsoObserved.first?.contains("sustained_cpu") == true)
     }
 
+    @Test("an astronomically large deviation reads as 'far above' instead of trapping")
+    func hugeDeviationDoesNotCrash() {
+        // A near-flat baseline gives a finite deviation far past Int.max. The
+        // 0.3.0 release trapped here (EXC_BREAKPOINT) and killed the app.
+        for deviation in [1e19, 1e30, .greatestFiniteMagnitude, .infinity, .nan, -1e30] {
+            let note = AnomalyGrouper.note(for: anomaly(kind: .sustainedCPU, deviation: deviation))
+            #expect(note.hasPrefix("sustained_cpu"))
+        }
+        #expect(AnomalyGrouper.note(for: anomaly(kind: .sustainedCPU, deviation: 1e30)).contains("far above a flat baseline"))
+        // Ordinary deviations still quote the number.
+        #expect(AnomalyGrouper.note(for: anomaly(kind: .sustainedCPU, deviation: 41.6)).contains("42 MADs above baseline"))
+    }
+
+    @Test("a huge baseline ratio reads as 'over a million×' instead of trapping")
+    func hugeRatioDoesNotCrash() {
+        #expect(MachineGlance.multipleText(1e30) == "over a million×")
+        #expect(MachineGlance.multipleText(.greatestFiniteMagnitude) == "over a million×")
+        #expect(MachineGlance.multipleText(.infinity) == "over a million×")
+        #expect(MachineGlance.multipleText(2_500) == "about 2500×")
+        #expect(MachineGlance.multipleText(2.4) == "about 2.4×")
+    }
+
     @Test("confidence ties keep the first candidate — the proven long-window rule")
     func tieKeepsRuleOrder() {
         let ratio = anomaly(kind: .cpuTimeRatio, confidence: Confidence(score: 0.8))
