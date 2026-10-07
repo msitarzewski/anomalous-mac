@@ -1,7 +1,13 @@
 # Changelog
 
 All notable changes to the Anomalous macOS sensor. Dates are release dates;
-`0.3.0` (`CFBundleVersion` 10) is the latest release.
+`0.3.1` (`CFBundleVersion` 11) is the latest release.
+
+## 0.3.1 — 2026-10-06
+
+- Fixed a crash when a process's baseline was nearly flat, which made a
+  deviation too large to display. Such values now read "far above a flat
+  baseline" instead of quitting the app.
 
 ## 0.3.0 — 2026-10-06
 

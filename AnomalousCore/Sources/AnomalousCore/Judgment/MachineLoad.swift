@@ -93,7 +93,13 @@ public enum MachineGlance {
     /// A "~2.4×" / "~2×" multiple, kept coarse: the point is the order of
     /// magnitude over usual, not spurious precision.
     static func multipleText(_ multiple: Double) -> String {
-        if multiple >= 10 { return "about \(Int(multiple.rounded()))×" }
+        if multiple >= 10 {
+            // A near-zero baseline can make the ratio astronomically large; a
+            // plain `Int(_:)` would trap, and a seven-digit multiple isn't
+            // useful to read anyway.
+            guard multiple.isFinite, multiple < 1_000_000 else { return "over a million×" }
+            return "about \(Int(multiple.rounded()))×"
+        }
         // One decimal, but drop a trailing ".0" so 2.0 reads "2×".
         let rounded = (multiple * 10).rounded() / 10
         if rounded == rounded.rounded() { return "about \(Int(rounded))×" }
